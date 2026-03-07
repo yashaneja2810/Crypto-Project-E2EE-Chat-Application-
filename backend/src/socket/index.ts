@@ -168,6 +168,19 @@ export function setupSocketIO(io: SocketIOServer): void {
       }
     });
 
+    // Handle dynamic chat room joining (for new chats created after connection)
+    socket.on('chat:join', async (data: { chatId: string }) => {
+      try {
+        const isInChat = await ChatModel.isUserInChat(data.chatId, userId);
+        if (isInChat) {
+          socket.join(`chat:${data.chatId}`);
+          logger.info(`User ${userId} joined chat room: ${data.chatId}`);
+        }
+      } catch (error) {
+        logger.error('Error joining chat room:', error);
+      }
+    });
+
     // Handle encrypted chat key sharing
     socket.on('chat:key:share', async (data: {
       chatId: string;

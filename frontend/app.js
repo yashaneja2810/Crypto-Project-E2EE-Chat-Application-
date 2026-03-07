@@ -439,7 +439,18 @@ async function initializeChat() {
             console.log('🔑 Received encrypted chat key:', data);
             try {
                 await cryptoHelper.decryptChatKey(data.encrypted_chat_key, data.chatId);
-                showAlert('success', 'Chat key received! You can now send messages.');
+                // Join the socket room so we receive messages for this new chat
+                socket.emit('chat:join', { chatId: data.chatId });
+                // Add to sidebar if not already present
+                if (!recentChatsData.has(data.chatId)) {
+                    const profile = data.from ? await getProfile(data.from) : null;
+                    const name = getDisplayName(profile, data.from);
+                    recentChatsData.set(data.chatId, {
+                        name, recipientId: data.from,
+                        lastMsg: '', lastTime: new Date().toISOString(), unreadCount: 0,
+                    });
+                    renderAllChatItems();
+                }
             } catch (error) {
                 console.error('Failed to decrypt chat key:', error);
             }
@@ -804,6 +815,8 @@ window.startChatWithUser = async function(userId, name) {
             });
             renderAllChatItems();
         }
+        // Join socket room for this chat so we receive real-time messages
+        if (socket) socket.emit('chat:join', { chatId: chat.id });
         openChat(chat.id, userId, name);
     } catch (e) {
         showAlert('error', e.message);
@@ -877,6 +890,15 @@ async function displayReceivedMessage(data) {
             data.encrypted_content, data.iv, chatId
         );
 
+        // If this chat isn't in sidebar yet, add it (new chat started by the other user)
+        if (!recentChatsData.has(chatId)) {
+            const profile = data.sender_id ? await getProfile(data.sender_id) : null;
+            const name = getDisplayName(profile, data.sender_id);
+            recentChatsData.set(chatId, {
+                name, recipientId: data.sender_id,
+                lastMsg: '', lastTime: new Date().toISOString(), unreadCount: 0,
+            });
+        }
         // Update sidebar preview regardless of active chat
         updateRecentChat(chatId, plaintext, data.created_at || new Date().toISOString());
 
