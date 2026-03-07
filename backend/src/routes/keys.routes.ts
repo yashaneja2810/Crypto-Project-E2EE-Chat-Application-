@@ -8,13 +8,13 @@ const router = Router();
 
 // Validation schemas
 const uploadKeysSchema = Joi.object({
-    rsa_public_key: Joi.string().required(),
+    ecdh_public_key: Joi.string().required(),
     encrypted_master_key: Joi.object({
         wrapped: Joi.string().required(),
         iv: Joi.string().required(),
         salt: Joi.string().required()
     }).required(),
-    encrypted_rsa_private_key: Joi.object({
+    encrypted_private_key: Joi.object({
         encrypted: Joi.string().required(),
         iv: Joi.string().required()
     }).required()
@@ -39,14 +39,14 @@ router.post('/', verifySupabaseToken, async (req: AuthRequest, res: Response) =>
             return;
         }
 
-        const { rsa_public_key, encrypted_master_key, encrypted_rsa_private_key } = req.body;
+        const { ecdh_public_key, encrypted_master_key, encrypted_private_key } = req.body;
         const userId = req.user!.id;
 
         await KeysModel.uploadUserKeys(
             userId,
-            rsa_public_key,
+            ecdh_public_key,
             JSON.stringify(encrypted_master_key),
-            JSON.stringify(encrypted_rsa_private_key)
+            JSON.stringify(encrypted_private_key)
         );
 
         logger.info('✅ User keys uploaded:', userId);
@@ -78,8 +78,8 @@ router.get('/:userId', verifySupabaseToken, async (req: AuthRequest, res: Respon
 
         res.json({
             encrypted_master_key: JSON.parse(keys.encrypted_master_key),
-            encrypted_rsa_private_key: JSON.parse(keys.encrypted_rsa_private_key),
-            rsa_public_key: keys.public_key
+            encrypted_private_key: JSON.parse(keys.encrypted_rsa_private_key),
+            ecdh_public_key: keys.public_key
         });
     } catch (error) {
         logger.error('Error getting keys:', error);

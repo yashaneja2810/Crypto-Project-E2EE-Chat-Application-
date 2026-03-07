@@ -54,31 +54,25 @@ class CryptoHelper {
     }
 
     /**
-     * Generate RSA key pair for user
+     * Generate ECDH key pair for user (P-256)
      */
     async generateUserKeys() {
-        console.log('🔐 Generating RSA key pair...');
-        
+        console.log('🔐 Generating ECDH key pair (P-256)...');
+
         const keyPair = await crypto.subtle.generateKey(
             {
-                name: 'RSA-OAEP',
-                modulusLength: 2048,
-                publicExponent: new Uint8Array([1, 0, 1]),
-                hash: 'SHA-256',
+                name: 'ECDH',
+                namedCurve: 'P-256',
             },
             true,
-            ['encrypt', 'decrypt']
+            ['deriveKey', 'deriveBits']
         );
 
         this.privateKey = keyPair.privateKey;
         this.publicKey = keyPair.publicKey;
 
-        // Store private key in localStorage (in production, use IndexedDB)
-        const exportedPrivateKey = await crypto.subtle.exportKey('jwk', this.privateKey);
-        localStorage.setItem('privateKey', JSON.stringify(exportedPrivateKey));
-
-        console.log('✅ RSA key pair generated!');
-        console.log('🔒 Private key stored locally (NEVER uploaded!)');
+        console.log('✅ ECDH key pair generated!');
+        console.log('🔒 Private key will be encrypted before upload (NEVER stored plaintext!)');
 
         return keyPair;
     }
@@ -95,11 +89,11 @@ class CryptoHelper {
             'jwk',
             keyData,
             {
-                name: 'RSA-OAEP',
-                hash: 'SHA-256',
+                name: 'ECDH',
+                namedCurve: 'P-256',
             },
             true,
-            ['decrypt']
+            ['deriveKey', 'deriveBits']
         );
 
         console.log('✅ Private key loaded from storage');
@@ -115,7 +109,7 @@ class CryptoHelper {
     }
 
     /**
-     * Import public key from base64 string
+     * Import ECDH public key from base64 string
      */
     async importPublicKey(base64Key) {
         const keyData = JSON.parse(atob(base64Key));
@@ -123,37 +117,52 @@ class CryptoHelper {
             'jwk',
             keyData,
             {
-                name: 'RSA-OAEP',
-                hash: 'SHA-256',
+                name: 'ECDH',
+                namedCurve: 'P-256',
             },
             true,
-            ['encrypt']
+            []
         );
     }
 
     /**
-     * Generate AES symmetric key for a chat
+     * Derive a per-chat AES-256 key using ECDH + HKDF.
+     * Both parties independently derive the same key:
+     *   derivedKey = HKDF(ECDH(myPrivate, theirPublic), salt=chatId)
      */
-    async generateChatKey(chatId) {
-        console.log(`🔑 Generating AES chat key for chat ${chatId}...`);
-        
-        const chatKey = await crypto.subtle.generateKey(
+    async deriveChatKey(recipientPublicKey, chatId) {
+        console.log(`🔑 Deriving ECDH chat key for chat ${chatId}...`);
+
+        // Step 1: ECDH - compute shared secret
+        const sharedBits = await crypto.subtle.deriveBits(
+            { name: 'ECDH', public: recipientPublicKey },
+            this.privateKey,
+            256
+        );
+
+        // Step 2: HKDF - derive a unique AES-256 key for this specific chat
+        const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+        const chatKey = await crypto.subtle.deriveKey(
             {
-                name: 'AES-GCM',
-                length: 256,
+                name: 'HKDF',
+                hash: 'SHA-256',
+                salt: new TextEncoder().encode(chatId),
+                info: new TextEncoder().encode('chat-key-v1'),
             },
+            hkdfKey,
+            { name: 'AES-GCM', length: 256 },
             true,
             ['encrypt', 'decrypt']
         );
 
         this.chatKeys.set(chatId, chatKey);
-
-        // Store in localStorage (in production, use IndexedDB)
         const exported = await crypto.subtle.exportKey('raw', chatKey);
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
-        localStorage.setItem(`chatKey_${chatId}`, base64);
+        localStorage.setItem(
+            `chatKey_${chatId}`,
+            btoa(String.fromCharCode(...new Uint8Array(exported)))
+        );
 
-        console.log('✅ Chat key generated and stored locally');
+        console.log(`✅ ECDH chat key derived for chat ${chatId}`);
         return chatKey;
     }
 
@@ -186,70 +195,7 @@ class CryptoHelper {
         return chatKey;
     }
 
-    /**
-     * Encrypt chat key with recipient's public key
-     */
-    async encryptChatKey(chatKey, recipientPublicKey) {
-        const exported = await crypto.subtle.exportKey('raw', chatKey);
-        const encrypted = await crypto.subtle.encrypt(
-            {
-                name: 'RSA-OAEP',
-            },
-            recipientPublicKey,
-            exported
-        );
 
-        return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
-    }
-
-    /**
-     * Decrypt chat key with own private key
-     */
-    async decryptChatKey(encryptedKeyBase64, chatId) {
-        try {
-            console.log(`🔐 Attempting to decrypt chat key for chat ${chatId}`);
-            console.log(`   Private key available: ${!!this.privateKey}`);
-            console.log(`   Encrypted key length: ${encryptedKeyBase64.length} chars`);
-            
-            const encryptedKey = Uint8Array.from(atob(encryptedKeyBase64), c => c.charCodeAt(0));
-            console.log(`   Decoded to ${encryptedKey.length} bytes`);
-            
-            const decrypted = await crypto.subtle.decrypt(
-                {
-                    name: 'RSA-OAEP',
-                },
-                this.privateKey,
-                encryptedKey
-            );
-            console.log(`   ✅ RSA decryption successful, ${decrypted.byteLength} bytes`);
-
-            const chatKey = await crypto.subtle.importKey(
-                'raw',
-                decrypted,
-                {
-                    name: 'AES-GCM',
-                },
-                true,
-                ['encrypt', 'decrypt']
-            );
-            console.log(`   ✅ AES key imported successfully`);
-
-            this.chatKeys.set(chatId, chatKey);
-
-            // Store it
-            const base64 = btoa(String.fromCharCode(...new Uint8Array(decrypted)));
-            localStorage.setItem(`chatKey_${chatId}`, base64);
-
-            console.log(`✅ Chat key decrypted and stored for chat ${chatId}`);
-            return chatKey;
-        } catch (error) {
-            console.error('❌ Chat key decryption failed:', error);
-            console.error('   Error type:', error.name);
-            console.error('   Error message:', error.message);
-            console.error('   Stack:', error.stack);
-            throw new Error('Failed to decrypt chat key. This usually happens when your encryption keys were regenerated. Please ask the sender to create a new chat.');
-        }
-    }
 
     /**
      * Encrypt a message
@@ -465,10 +411,10 @@ class CryptoHelper {
     }
 
     /**
-     * Encrypt RSA private key with master key
+     * Encrypt ECDH private key with master key (AES-GCM wrap)
      */
-    async encryptRSAPrivateKey(rsaPrivateKey, masterKey) {
-        const exported = await crypto.subtle.exportKey('pkcs8', rsaPrivateKey);
+    async encryptPrivateKey(privateKey, masterKey) {
+        const exported = await crypto.subtle.exportKey('pkcs8', privateKey);
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const encrypted = await crypto.subtle.encrypt(
             { name: 'AES-GCM', iv },
@@ -483,9 +429,9 @@ class CryptoHelper {
     }
 
     /**
-     * Decrypt RSA private key with master key
+     * Decrypt ECDH private key with master key
      */
-    async decryptRSAPrivateKey(encryptedData, masterKey) {
+    async decryptPrivateKey(encryptedData, masterKey) {
         const iv = Uint8Array.from(atob(encryptedData.iv), c => c.charCodeAt(0));
         const encrypted = Uint8Array.from(atob(encryptedData.encrypted), c => c.charCodeAt(0));
 
@@ -498,9 +444,9 @@ class CryptoHelper {
         return await crypto.subtle.importKey(
             'pkcs8',
             decrypted,
-            { name: 'RSA-OAEP', hash: 'SHA-256' },
+            { name: 'ECDH', namedCurve: 'P-256' },
             true,
-            ['decrypt']
+            ['deriveKey', 'deriveBits']
         );
     }
 

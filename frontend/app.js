@@ -125,19 +125,19 @@ async function handleExistingSession(session) {
                     await supabaseClient.auth.signOut();
                     return;
                 }
-                throw new Error('Failed to fetch encrypted RSA keys');
+                throw new Error('Failed to fetch encrypted ECDH keys');
             }
 
             keys = await response.json();
-            updateDebugLog('✅ RSA keys downloaded');
+            updateDebugLog('✅ ECDH keys downloaded');
             await cryptoHelper.storeCachedServerKeys(keys);
         }
 
-        updateDebugLog('🔄 Decrypting RSA private key...');
+        updateDebugLog('🔄 Decrypting ECDH private key...');
         try {
-            cryptoHelper.privateKey = await cryptoHelper.decryptRSAPrivateKey(keys.encrypted_rsa_private_key, masterKey);
-            cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.rsa_public_key);
-            updateDebugLog('✅ RSA keys decrypted and ready');
+            cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(keys.encrypted_private_key, masterKey);
+            cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
+            updateDebugLog('✅ ECDH keys decrypted and ready');
         } catch (decryptError) {
             updateDebugLog('❌ Failed to decrypt keys - master key mismatch');
             showAlert('error', 'Encryption key mismatch. This account may be corrupted. Please delete your account and sign up again.');
@@ -205,13 +205,13 @@ async function handleSignup() {
             }
             updateDebugLog('✅ Step 5: Profile created!');
 
-            updateDebugLog('🔄 Step 6: Generating RSA key pair (2048-bit)...');
+            updateDebugLog('🔄 Step 6: Generating ECDH key pair (P-256)...');
             await cryptoHelper.generateUserKeys();
-            updateDebugLog('✅ Step 6: RSA keys generated!');
+            updateDebugLog('✅ Step 6: ECDH keys generated!');
 
-            updateDebugLog('🔄 Step 7: Encrypting RSA private key with master key...');
-            const encryptedRSAPrivateKey = await cryptoHelper.encryptRSAPrivateKey(cryptoHelper.privateKey, masterKey);
-            updateDebugLog('✅ Step 7: RSA private key encrypted! (Double encryption)');
+            updateDebugLog('🔄 Step 7: Encrypting ECDH private key with master key...');
+            const encryptedPrivateKey = await cryptoHelper.encryptPrivateKey(cryptoHelper.privateKey, masterKey);
+            updateDebugLog('✅ Step 7: ECDH private key encrypted!');
 
             updateDebugLog('🔄 Step 8: Storing master key on device (IndexedDB)...');
             await cryptoHelper.storeMasterKeyInIndexedDB(masterKey);
@@ -226,9 +226,9 @@ async function handleSignup() {
                     'Authorization': `Bearer ${data.session.access_token}`,
                 },
                 body: JSON.stringify({
-                    rsa_public_key: publicKeyBase64,
+                    ecdh_public_key: publicKeyBase64,
                     encrypted_master_key: encryptedMasterKey,
-                    encrypted_rsa_private_key: encryptedRSAPrivateKey,
+                    encrypted_private_key: encryptedPrivateKey,
                 }),
             });
             if (!response.ok) {
@@ -310,38 +310,38 @@ async function handleLogin() {
             await cryptoHelper.storeCachedServerKeys(keys);
             updateDebugLog('✅ Server keys cached locally!');
 
-            updateDebugLog('🔄 Step 7: Decrypting RSA private key...');
+            updateDebugLog('🔄 Step 7: Decrypting ECDH private key...');
             try {
-                cryptoHelper.privateKey = await cryptoHelper.decryptRSAPrivateKey(keys.encrypted_rsa_private_key, masterKey);
-                updateDebugLog('✅ Step 7: RSA private key decrypted! (Double decryption)');
-                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.rsa_public_key);
-                updateDebugLog('✅ RSA public key loaded!');
+                cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(keys.encrypted_private_key, masterKey);
+                updateDebugLog('✅ Step 7: ECDH private key decrypted!');
+                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
+                updateDebugLog('✅ ECDH public key loaded!');
             } catch (decryptError) {
                 updateDebugLog('❌ Master key mismatch - wrong password or corrupted account');
                 throw new Error('Wrong password or corrupted account. Please verify your password or sign up again.');
             }
         } else {
-            updateDebugLog('🔄 Step 4: Loading RSA keys...');
+            updateDebugLog('🔄 Step 4: Loading ECDH keys...');
             let keys = await cryptoHelper.loadCachedServerKeys();
             if (keys) {
                 updateDebugLog('✅ Step 4: Keys loaded from local cache! (No network needed)');
             } else {
-                updateDebugLog('🔄 Downloading RSA keys from server...');
+                updateDebugLog('🔄 Downloading ECDH keys from server...');
                 const response = await fetch(`${BACKEND_URL}/api/keys/${data.user.id}`, {
                     headers: { 'Authorization': `Bearer ${data.session.access_token}` },
                 });
-                if (!response.ok) throw new Error('Failed to fetch encrypted RSA keys from server');
+                if (!response.ok) throw new Error('Failed to fetch encrypted ECDH keys from server');
                 keys = await response.json();
-                updateDebugLog('✅ Step 4: RSA keys downloaded!');
+                updateDebugLog('✅ Step 4: ECDH keys downloaded!');
                 await cryptoHelper.storeCachedServerKeys(keys);
             }
 
-            updateDebugLog('🔄 Step 5: Decrypting RSA private key with cached master key...');
+            updateDebugLog('🔄 Step 5: Decrypting ECDH private key with cached master key...');
             try {
-                cryptoHelper.privateKey = await cryptoHelper.decryptRSAPrivateKey(keys.encrypted_rsa_private_key, masterKey);
-                updateDebugLog('✅ Step 5: RSA private key decrypted!');
-                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.rsa_public_key);
-                updateDebugLog('✅ RSA public key loaded!');
+                cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(keys.encrypted_private_key, masterKey);
+                updateDebugLog('✅ Step 5: ECDH private key decrypted!');
+                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
+                updateDebugLog('✅ ECDH public key loaded!');
             } catch (decryptError) {
                 updateDebugLog('⚠️ Master key / cached keys mismatch — fetching fresh copies from server...');
                 await cryptoHelper.clearMasterKeyFromIndexedDB();
@@ -361,9 +361,9 @@ async function handleLogin() {
                 await cryptoHelper.storeMasterKeyInIndexedDB(masterKey);
                 await cryptoHelper.storeCachedServerKeys(freshKeys);
 
-                cryptoHelper.privateKey = await cryptoHelper.decryptRSAPrivateKey(freshKeys.encrypted_rsa_private_key, masterKey);
-                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(freshKeys.rsa_public_key);
-                updateDebugLog('✅ RSA keys recovered and cached!');
+                cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(freshKeys.encrypted_private_key, masterKey);
+                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(freshKeys.ecdh_public_key);
+                updateDebugLog('✅ ECDH keys recovered and cached!');
             }
         }
 
@@ -435,24 +435,19 @@ async function initializeChat() {
             updateChatDebugLog(`🔄 Reconnecting to server... (attempt ${attempt})`);
         });
 
-        socket.on('chat:key:received', async (data) => {
-            console.log('🔑 Received encrypted chat key:', data);
-            try {
-                await cryptoHelper.decryptChatKey(data.encrypted_chat_key, data.chatId);
-                // Join the socket room so we receive messages for this new chat
-                socket.emit('chat:join', { chatId: data.chatId });
-                // Add to sidebar if not already present
-                if (!recentChatsData.has(data.chatId)) {
-                    const profile = data.from ? await getProfile(data.from) : null;
-                    const name = getDisplayName(profile, data.from);
-                    recentChatsData.set(data.chatId, {
-                        name, recipientId: data.from,
-                        lastMsg: '', lastTime: new Date().toISOString(), unreadCount: 0,
-                    });
-                    renderAllChatItems();
-                }
-            } catch (error) {
-                console.error('Failed to decrypt chat key:', error);
+        socket.on('chat:new', async (data) => {
+            console.log('💬 New chat notification:', data);
+            // Join the socket room so we receive real-time messages
+            socket.emit('chat:join', { chatId: data.chatId });
+            // Add to sidebar if not already present
+            if (!recentChatsData.has(data.chatId)) {
+                const profile = data.from ? await getProfile(data.from) : null;
+                const name = getDisplayName(profile, data.from);
+                recentChatsData.set(data.chatId, {
+                    name, recipientId: data.from,
+                    lastMsg: '', lastTime: new Date().toISOString(), unreadCount: 0,
+                });
+                renderAllChatItems();
             }
         });
 
@@ -508,47 +503,19 @@ async function openChat(chatId, recipientId, name) {
 }
 
 /**
- * Ensure we have a chat key (local -> server -> generate new)
+ * Ensure we have a chat key — derived via ECDH + HKDF from recipient's public key
  */
 async function ensureChatKey(chatId, recipientId) {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-
     if (await cryptoHelper.loadChatKey(chatId)) return;
 
-    const keysRes = await fetch(`${BACKEND_URL}/api/chats/${chatId}/keys`, {
-        headers: { 'Authorization': `Bearer ${session.access_token}` },
-    });
-    if (keysRes.ok) {
-        const { chat_keys } = await keysRes.json();
-        const ourKey = chat_keys.find(k => k.recipient_id === currentUser.id);
-        if (ourKey) {
-            await cryptoHelper.decryptChatKey(ourKey.encrypted_chat_key, chatId);
-            return;
-        }
-    }
-
-    // Generate new key and share with both parties
-    const chatKey = await cryptoHelper.generateChatKey(chatId);
-    const myPublicKey = await cryptoHelper.importPublicKey(await cryptoHelper.exportPublicKey());
-    const myEncKey = await cryptoHelper.encryptChatKey(chatKey, myPublicKey);
-    await fetch(`${BACKEND_URL}/api/chats/${chatId}/share-key`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-        body: JSON.stringify({ recipient_id: currentUser.id, encrypted_chat_key: myEncKey }),
-    });
-
+    const { data: { session } } = await supabaseClient.auth.getSession();
     const pubRes = await fetch(`${BACKEND_URL}/api/users/${recipientId}/public-key`, {
         headers: { 'Authorization': `Bearer ${session.access_token}` },
     });
-    if (!pubRes.ok) throw new Error('Recipient public key not found');
+    if (!pubRes.ok) throw new Error('Recipient public key not found — cannot derive chat key');
     const { public_key } = await pubRes.json();
-    const recipKey = await cryptoHelper.importPublicKey(public_key);
-    const recipEncKey = await cryptoHelper.encryptChatKey(chatKey, recipKey);
-    await fetch(`${BACKEND_URL}/api/chats/${chatId}/share-key`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-        body: JSON.stringify({ recipient_id: recipientId, encrypted_chat_key: recipEncKey }),
-    });
+    const recipientPublicKey = await cryptoHelper.importPublicKey(public_key);
+    await cryptoHelper.deriveChatKey(recipientPublicKey, chatId);
 }
 
 /**
@@ -569,18 +536,9 @@ async function loadMessageHistory(chatId, retryAttempt = 0) {
         const { data: { session } } = await supabaseClient.auth.getSession();
 
         if (!await cryptoHelper.loadChatKey(chatId)) {
-            updateChatDebugLog('🔑 No chat key found locally, fetching from server...');
-            const keysResponse = await fetch(`${BACKEND_URL}/api/chats/${chatId}/keys`, {
-                headers: { 'Authorization': `Bearer ${session.access_token}` },
-            });
-            if (keysResponse.ok) {
-                const { chat_keys } = await keysResponse.json();
-                const ourKey = chat_keys.find(key => key.recipient_id === currentUser.id);
-                if (ourKey) {
-                    await cryptoHelper.decryptChatKey(ourKey.encrypted_chat_key, chatId);
-                    updateChatDebugLog('✅ Chat key downloaded and decrypted');
-                }
-            }
+            updateChatDebugLog('🔑 No chat key found locally, deriving via ECDH...');
+            await ensureChatKey(chatId, currentRecipientId);
+            updateChatDebugLog('✅ Chat key derived');
         }
 
         const response = await fetch(`${BACKEND_URL}/api/chats/${chatId}/messages?limit=50`, {
@@ -618,28 +576,18 @@ async function loadMessageHistory(chatId, retryAttempt = 0) {
 
                 if (!firstDecryptFailed && messages.length > 0) {
                     firstDecryptFailed = true;
-                    updateChatDebugLog('⚠️ Decryption failed - wrong cached key, fetching correct one...');
-                    localStorage.removeItem(`chatKeys_${chatId}`);
+                    updateChatDebugLog('⚠️ Decryption failed — clearing cached key and re-deriving via ECDH...');
+                    localStorage.removeItem(`chatKey_${chatId}`);
+                    cryptoHelper.chatKeys.delete(chatId);
 
                     try {
-                        const keysResponse = await fetch(`${BACKEND_URL}/api/chats/${chatId}/keys`, {
-                            headers: { 'Authorization': `Bearer ${session.access_token}` },
-                        });
-                        if (keysResponse.ok) {
-                            const { chat_keys } = await keysResponse.json();
-                            const ourKey = chat_keys.find(key => key.recipient_id === currentUser.id);
-                            if (ourKey) {
-                                const correctKey = await cryptoHelper.decryptChatKey(ourKey.encrypted_chat_key, chatId);
-                                if (correctKey) {
-                                    updateChatDebugLog('✅ Correct key loaded! Reloading messages...');
-                                    return await loadMessageHistory(chatId, retryAttempt + 1);
-                                }
-                            }
-                        }
-                    } catch (fetchError) {
-                        console.error('Server fetch error:', fetchError);
+                        await ensureChatKey(chatId, currentRecipientId);
+                        updateChatDebugLog('✅ Key re-derived! Reloading messages...');
+                        return await loadMessageHistory(chatId, retryAttempt + 1);
+                    } catch (deriveError) {
+                        console.error('ECDH re-derive error:', deriveError);
                     }
-                    updateChatDebugLog('❌ Could not fetch correct key from server');
+                    updateChatDebugLog('❌ Could not re-derive key');
                 }
 
                 const messageDiv = document.createElement('div');
@@ -817,6 +765,8 @@ window.startChatWithUser = async function(userId, name) {
         }
         // Join socket room for this chat so we receive real-time messages
         if (socket) socket.emit('chat:join', { chatId: chat.id });
+        // Notify recipient that a new chat has been created
+        if (socket) socket.emit('chat:new:notify', { chatId: chat.id, recipientId: userId });
         openChat(chat.id, userId, name);
     } catch (e) {
         showAlert('error', e.message);
@@ -875,15 +825,16 @@ async function displayReceivedMessage(data) {
         const chatId = data.chat_id;
 
         if (!cryptoHelper.chatKeys.has(chatId)) {
+            // Derive the chat key via ECDH using sender's public key
             const { data: { session } } = await supabaseClient.auth.getSession();
             if (!session) throw new Error('Not authenticated');
-            const response = await fetch(`${BACKEND_URL}/api/chats/${chatId}/my-key`, {
+            const pubRes = await fetch(`${BACKEND_URL}/api/users/${data.sender_id}/public-key`, {
                 headers: { 'Authorization': `Bearer ${session.access_token}` },
             });
-            if (!response.ok) throw new Error(`Chat key fetch failed: ${response.status}`);
-            const { encrypted_chat_key } = await response.json();
-            if (!encrypted_chat_key) throw new Error('No chat key returned from server');
-            await cryptoHelper.decryptChatKey(encrypted_chat_key, chatId);
+            if (!pubRes.ok) throw new Error('Sender public key not found');
+            const { public_key } = await pubRes.json();
+            const senderPublicKey = await cryptoHelper.importPublicKey(public_key);
+            await cryptoHelper.deriveChatKey(senderPublicKey, chatId);
         }
 
         const plaintext = await cryptoHelper.decryptMessage(

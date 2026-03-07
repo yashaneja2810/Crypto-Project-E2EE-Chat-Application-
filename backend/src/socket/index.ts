@@ -5,7 +5,6 @@ import { SocketEvents, TypingIndicator } from '../types';
 import { MessageModel } from '../models/message.model';
 import { ChatModel } from '../models/chat.model';
 import { UserModel } from '../models/user.model';
-import { KeysModel } from '../models/keys.model';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -181,34 +180,23 @@ export function setupSocketIO(io: SocketIOServer): void {
       }
     });
 
-    // Handle encrypted chat key sharing
-    socket.on('chat:key:share', async (data: {
-      chatId: string;
-      recipientId: string;
-      encryptedChatKey: string;
-    }) => {
+    // Notify recipient when a new chat is created (ECDH: no key sharing needed)
+    socket.on('chat:new:notify', async (data: { chatId: string; recipientId: string }) => {
       try {
-        // Verify user is in chat
         const isInChat = await ChatModel.isUserInChat(data.chatId, userId);
         if (!isInChat) {
           socket.emit(SocketEvents.ERROR, { message: 'Not authorized' });
           return;
         }
 
-        // Store encrypted chat key
-        await KeysModel.shareChatKey(data.chatId, userId, data.recipientId, data.encryptedChatKey);
-
-        // Notify recipient they have a chat key
-        io.to(`user:${data.recipientId}`).emit('chat:key:received', {
+        io.to(`user:${data.recipientId}`).emit('chat:new', {
           chatId: data.chatId,
           from: userId,
-          encrypted_chat_key: data.encryptedChatKey,
         });
 
-        logger.info(`Chat key shared: ${userId} → ${data.recipientId} for chat ${data.chatId}`);
+        logger.info(`New chat notified: ${userId} → ${data.recipientId} for chat ${data.chatId}`);
       } catch (error) {
-        logger.error('Error sharing chat key:', error);
-        socket.emit(SocketEvents.ERROR, { message: 'Failed to share chat key' });
+        logger.error('Error notifying new chat:', error);
       }
     });
 

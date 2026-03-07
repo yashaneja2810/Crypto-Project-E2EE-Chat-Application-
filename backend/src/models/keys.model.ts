@@ -71,22 +71,22 @@ export class KeysModel {
   }
 
   /**
-   * Upload all user keys (master key + RSA keys)
+   * Upload all user keys (master key + ECDH keys)
    */
   static async uploadUserKeys(
     userId: string,
-    rsaPublicKey: string,
+    ecdhPublicKey: string,
     encryptedMasterKey: string,
-    encryptedRSAPrivateKey: string
+    encryptedPrivateKey: string
   ): Promise<UserKey | null> {
     try {
       const { data, error } = await supabaseAdmin
         .from('user_keys')
         .upsert({
           user_id: userId,
-          public_key: rsaPublicKey,
+          public_key: ecdhPublicKey,
           encrypted_master_key: encryptedMasterKey,
-          encrypted_rsa_private_key: encryptedRSAPrivateKey,
+          encrypted_rsa_private_key: encryptedPrivateKey,
           updated_at: new Date().toISOString(),
         })
         .select()
