@@ -7,6 +7,52 @@ class CryptoHelper {
         this.chatKeys = new Map(); // chatId -> AES key
     }
 
+    // ============ INDEXEDDB HELPERS ============
+
+    _openDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('EncryptionDB', 1);
+            request.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('keys')) {
+                    db.createObjectStore('keys');
+                }
+            };
+            request.onsuccess = (e) => resolve(e.target.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async _idbSet(key, value) {
+        const db = await this._openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(['keys'], 'readwrite');
+            tx.objectStore('keys').put(value, key);
+            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.onerror = () => { db.close(); reject(tx.error); };
+        });
+    }
+
+    async _idbGet(key) {
+        const db = await this._openDB();
+        return new Promise((resolve) => {
+            const tx = db.transaction(['keys'], 'readonly');
+            const req = tx.objectStore('keys').get(key);
+            req.onsuccess = () => { db.close(); resolve(req.result ?? null); };
+            req.onerror = () => { db.close(); resolve(null); };
+        });
+    }
+
+    async _idbDelete(key) {
+        const db = await this._openDB();
+        return new Promise((resolve) => {
+            const tx = db.transaction(['keys'], 'readwrite');
+            tx.objectStore('keys').delete(key);
+            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.onerror = () => { db.close(); resolve(); };
+        });
+    }
+
     /**
      * Generate RSA key pair for user
      */
@@ -385,173 +431,37 @@ class CryptoHelper {
     async storeMasterKeyInIndexedDB(masterKey) {
         const exported = await crypto.subtle.exportKey('raw', masterKey);
         const base64Key = btoa(String.fromCharCode(...new Uint8Array(exported)));
-        
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open('EncryptionDB', 1);
-            
-            request.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                const transaction = e.target.transaction;
-                
-                let store;
-                if (!db.objectStoreNames.contains('keys')) {
-                    // Create the object store
-                    store = db.createObjectStore('keys');
-                } else {
-                    // Get existing store from the upgrade transaction
-                    store = transaction.objectStore('keys');
-                }
-                
-                // Store the key in the upgrade transaction
-                store.put(base64Key, 'masterKey');
-                console.log('📦 Stored master key during database upgrade');
-            };
-            
-            request.onsuccess = (e) => {
-                const db = e.target.result;
-                
-                // Check if we need to store (database already existed)
-                if (db.objectStoreNames.contains('keys')) {
-                    // Database existed, use a new transaction to update
-                    try {
-                        const tx = db.transaction(['keys'], 'readwrite');
-                        const store = tx.objectStore('keys');
-                        store.put(base64Key, 'masterKey');
-                        
-                        tx.oncomplete = () => {
-                            console.log('✅ Master key updated in IndexedDB');
-                            db.close();
-                            resolve();
-                        };
-                        
-                        tx.onerror = () => {
-                            db.close();
-                            reject(tx.error);
-                        };
-                    } catch (error) {
-                        console.error('Transaction error:', error);
-                        db.close();
-                        reject(error);
-                    }
-                } else {
-                    // Database was just created, already stored in upgrade
-                    console.log('✅ Master key stored in IndexedDB');
-                    db.close();
-                    resolve();
-                }
-            };
-            
-            request.onerror = () => {
-                console.error('IndexedDB error:', request.error);
-                reject(request.error);
-            };
-        });
+        await this._idbSet('masterKey', base64Key);
+        console.log('✅ Master key stored in IndexedDB');
     }
 
     /**
      * Load master key from IndexedDB
      */
     async loadMasterKeyFromIndexedDB() {
-        return new Promise((resolve) => {
-            const request = indexedDB.open('EncryptionDB', 1);
-            
-            request.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains('keys')) {
-                    db.createObjectStore('keys');
-                }
-            };
-            
-            request.onsuccess = async (e) => {
-                const db = e.target.result;
-                
-                if (!db.objectStoreNames.contains('keys')) {
-                    db.close();
-                    resolve(null);
-                    return;
-                }
-                
-                try {
-                    const tx = db.transaction(['keys'], 'readonly');
-                    const store = tx.objectStore('keys');
-                    const getReq = store.get('masterKey');
-                    
-                    getReq.onsuccess = async () => {
-                        db.close();
-                        if (!getReq.result) {
-                            resolve(null);
-                            return;
-                        }
-                        
-                        try {
-                            const keyData = Uint8Array.from(atob(getReq.result), c => c.charCodeAt(0));
-                            const masterKey = await crypto.subtle.importKey(
-                                'raw',
-                                keyData,
-                                { name: 'AES-GCM', length: 256 },
-                                true,
-                                ['encrypt', 'decrypt']
-                            );
-                            resolve(masterKey);
-                        } catch (error) {
-                            console.error('Failed to import master key:', error);
-                            resolve(null);
-                        }
-                    };
-                    
-                    getReq.onerror = () => {
-                        db.close();
-                        resolve(null);
-                    };
-                } catch (error) {
-                    db.close();
-                    resolve(null);
-                }
-            };
-            
-            request.onerror = () => resolve(null);
-        });
+        try {
+            const stored = await this._idbGet('masterKey');
+            if (!stored) return null;
+            const keyData = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
+            return await crypto.subtle.importKey(
+                'raw',
+                keyData,
+                { name: 'AES-GCM', length: 256 },
+                true,
+                ['encrypt', 'decrypt']
+            );
+        } catch (error) {
+            console.error('Failed to load master key:', error);
+            return null;
+        }
     }
 
     /**
      * Clear master key from IndexedDB
      */
     async clearMasterKeyFromIndexedDB() {
-        return new Promise((resolve) => {
-            const request = indexedDB.open('EncryptionDB', 1);
-            
-            request.onsuccess = (e) => {
-                const db = e.target.result;
-                
-                if (!db.objectStoreNames.contains('keys')) {
-                    db.close();
-                    resolve();
-                    return;
-                }
-                
-                try {
-                    const tx = db.transaction(['keys'], 'readwrite');
-                    const store = tx.objectStore('keys');
-                    store.delete('masterKey');
-                    
-                    tx.oncomplete = () => {
-                        db.close();
-                        console.log('🗑️ Cleared master key from IndexedDB');
-                        resolve();
-                    };
-                    
-                    tx.onerror = () => {
-                        db.close();
-                        resolve();
-                    };
-                } catch (error) {
-                    db.close();
-                    resolve();
-                }
-            };
-            
-            request.onerror = () => resolve();
-        });
+        await this._idbDelete('masterKey');
+        console.log('🗑️ Cleared master key from IndexedDB');
     }
 
     /**
@@ -650,15 +560,32 @@ class CryptoHelper {
      * Clear master key from IndexedDB (for corrupted accounts)
      */
     async clearMasterKey() {
+        await this.clearMasterKeyFromIndexedDB();
+    }
+
+    // ============ SERVER KEYS CACHE ============
+
+    /**
+     * Cache the server's encrypted key bundle locally.
+     * This eliminates a network round-trip on every page reload / session restore.
+     * Security: the bundle only contains already-encrypted blobs; the master key
+     * needed to decrypt them is stored separately and is equally protected.
+     */
+    async storeCachedServerKeys(keys) {
+        await this._idbSet('cachedServerKeys', JSON.stringify(keys));
+    }
+
+    async loadCachedServerKeys() {
         try {
-            const db = await this.openDB();
-            const tx = db.transaction('keys', 'readwrite');
-            const store = tx.objectStore('keys');
-            await store.delete('masterKey');
-            console.log('Master key cleared from IndexedDB');
-        } catch (error) {
-            console.error('Failed to clear master key:', error);
+            const stored = await this._idbGet('cachedServerKeys');
+            return stored ? JSON.parse(stored) : null;
+        } catch {
+            return null;
         }
+    }
+
+    async clearCachedServerKeys() {
+        await this._idbDelete('cachedServerKeys');
     }
 }
 
