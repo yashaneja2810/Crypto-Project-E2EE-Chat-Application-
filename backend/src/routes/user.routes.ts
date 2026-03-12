@@ -3,7 +3,6 @@ import { AuthRequest, verifySupabaseToken } from '../middleware/auth';
 import { validate } from '../middleware/validation';
 import { UserModel } from '../models/user.model';
 import { KeysModel } from '../models/keys.model';
-import { logger } from '../utils/logger';
 import Joi from 'joi';
 
 const router = Router();
@@ -82,64 +81,24 @@ router.get('/search/:query', verifySupabaseToken, async (req: AuthRequest, res: 
   }
 });
 
-// Upload/Update public key (RSA)
-router.post('/public-key', verifySupabaseToken, validate(publicKeySchema), async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user!.id;
-    const { public_key } = req.body;
-
-    logger.info(`Public key upload request from user ${userId}`);
-
-    // Check if user already has a public key (key rotation scenario)
-    const existingKey = await KeysModel.getPublicKey(userId);
-    const isKeyRotation = !!existingKey;
-
-    if (isKeyRotation) {
-      logger.info(`Key rotation detected for user ${userId} (existing key found)`);
-    } else {
-      logger.info(`First time key upload for user ${userId}`);
-    }
-
-    const result = await KeysModel.upsertPublicKey(userId, public_key);
-
-    if (!result) {
-      res.status(500).json({ error: 'Failed to store public key' });
-      return;
-    }
-
-    logger.info(`Public key upserted successfully for user ${userId}`);
-
-    // If this is a key rotation (user regenerated keys), delete old chat keys
-    // They can't be decrypted with the new private key anyway
-    if (isKeyRotation) {
-      const deleteSuccess = await KeysModel.deleteUserChatKeys(userId);
-      logger.info(`Chat keys deletion ${deleteSuccess ? 'succeeded' : 'failed'} for user ${userId}`);
-    }
-
-    res.json({ 
-      success: true, 
-      message: 'Public key stored successfully',
-      key_rotation: isKeyRotation 
-    });
-  } catch (error) {
-    logger.error('Error in public-key endpoint:', error);
-    res.status(500).json({ error: 'Failed to store public key' });
-  }
+// Upload/Update public key — legacy endpoint, key upload now uses POST /api/keys
+router.post('/public-key', verifySupabaseToken, validate(publicKeySchema), async (_req: AuthRequest, res: Response) => {
+  res.status(410).json({ error: 'This endpoint is deprecated. Use POST /api/keys to upload your key bundle.' });
 });
 
-// Get user's public key (anyone can access - public keys are meant to be shared!)
+// Get user's public key bundle (anyone can access - public keys are meant to be shared!)
 router.get('/:userId/public-key', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
 
-    const publicKey = await KeysModel.getPublicKey(userId);
+    const bundle = await KeysModel.getPublicKeyBundle(userId);
 
-    if (!publicKey) {
+    if (!bundle) {
       res.status(404).json({ error: 'Public key not found' });
       return;
     }
 
-    res.json({ public_key: publicKey });
+    res.json(bundle);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch public key' });
   }

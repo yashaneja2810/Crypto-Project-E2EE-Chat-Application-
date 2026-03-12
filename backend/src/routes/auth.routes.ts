@@ -1,7 +1,6 @@
 import { Router, Response } from 'express';
 import { AuthRequest, verifySupabaseToken } from '../middleware/auth';
 import { UserModel } from '../models/user.model';
-import { KeysModel } from '../models/keys.model';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -49,25 +48,12 @@ router.post('/sync', verifySupabaseToken, async (req: AuthRequest, res: Response
 
     logger.info(`Auth sync for user ${userId}, has_keys: ${has_keys}`);
 
-    // If user doesn't have keys locally, they regenerated them
-    // Delete all old chat keys (they're useless now)
-    if (!has_keys) {
-      logger.info(`User ${userId} has no local keys, deleting old chat keys...`);
-      const deleted = await KeysModel.deleteUserChatKeys(userId);
-      logger.info(`Chat keys deletion result for user ${userId}: ${deleted}`);
-      
-      res.json({ 
-        success: true, 
-        keys_cleared: true,
-        message: 'Old chat keys cleared. You can create new chats.' 
-      });
-    } else {
-      res.json({ 
-        success: true, 
-        keys_cleared: false,
-        message: 'Keys are synced.' 
-      });
-    }
+    // In the new crypto design, keys are derived via X25519 — nothing to clean up server-side
+    res.json({
+      success: true,
+      keys_cleared: false,
+      message: 'Keys are synced.'
+    });
   } catch (error) {
     logger.error('Error in auth sync:', error);
     res.status(500).json({ error: 'Sync failed' });

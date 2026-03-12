@@ -21,23 +21,23 @@
             z-index: 100;
         }
         .auth-card {
-            background: #1a1a1a;
-            border: 1px solid #333;
+            background: #111;
+            border: 1px solid #222;
             border-radius: 14px;
             padding: 40px 36px;
             width: 100%; max-width: 380px;
         }
         .auth-card h1 { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
-        .auth-card p  { color: #aaa; font-size: 13px; margin-bottom: 28px; }
+        .auth-card p  { color: #555; font-size: 13px; margin-bottom: 28px; }
         .form-group { margin-bottom: 16px; }
-        .form-group label { display: block; font-size: 12px; font-weight: 600; color: #bbb; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
         .form-group input {
             width: 100%; padding: 10px 14px;
-            background: #1a1a1a; border: 1px solid #444;
+            background: #1a1a1a; border: 1px solid #2a2a2a;
             border-radius: 8px; color: #fff; font-size: 14px; outline: none;
             transition: border-color .2s;
         }
-        .form-group input:focus { border-color: #888; }
+        .form-group input:focus { border-color: #555; }
         .btn {
             width: 100%; padding: 12px;
             background: #fff; color: #000;
@@ -48,9 +48,9 @@
         .btn:hover { background: #e0e0e0; }
         .btn-secondary {
             background: transparent; color: #fff;
-            border: 1px solid #555; margin-top: 10px;
+            border: 1px solid #333; margin-top: 10px;
         }
-        .btn-secondary:hover { background: #2a2a2a; }
+        .btn-secondary:hover { background: #1a1a1a; }
         #alertContainer { margin-top: 14px; }
         .alert { padding: 10px 14px; border-radius: 8px; font-size: 13px; }
         .alert-error   { background: #1f0000; border: 1px solid #5a0000; color: #ff8080; }
@@ -127,7 +127,7 @@
             transition: border-color .2s;
         }
         .search-input:focus { border-color: #444; }
-        .search-input::placeholder { color: #555; }
+        .search-input::placeholder { color: #333; }
         .search-results {
             display: none; position: absolute; left: 10px; right: 10px;
             top: calc(100% - 2px);
@@ -169,9 +169,9 @@
         }
         .chat-item-info { flex: 1; min-width: 0; }
         .chat-item-name { font-size: 14px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .chat-item-preview { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chat-item-preview { font-size: 12px; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .chat-item-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
-        .chat-item-time { font-size: 11px; color: #777; }
+        .chat-item-time { font-size: 11px; color: #444; }
         .unread-badge {
             background: #fff; color: #000;
             border-radius: 10px; font-size: 11px; font-weight: 700;
@@ -186,7 +186,7 @@
         #emptyState {
             flex: 1; display: flex; flex-direction: column;
             align-items: center; justify-content: center;
-            color: #555; gap: 12px;
+            color: #333; gap: 12px;
         }
         #emptyState .empty-icon { font-size: 48px; }
         #emptyState p { font-size: 15px; }
@@ -229,7 +229,7 @@
             background: #1e1e1e; color: #fff;
             border-bottom-left-radius: 4px;
         }
-        .message-time { font-size: 10px; color: #777; margin-top: 3px; padding: 0 4px; }
+        .message-time { font-size: 10px; color: #444; margin-top: 3px; padding: 0 4px; }
 
         /* input bar */
         .chat-input-bar {
@@ -243,7 +243,7 @@
             transition: border-color .2s;
         }
         #messageInput:focus { border-color: #444; }
-        #messageInput::placeholder { color: #555; }
+        #messageInput::placeholder { color: #333; }
         #sendBtn {
             width: 40px; height: 40px; border-radius: 50%;
             background: #fff; color: #000; border: none;
@@ -329,7 +329,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js"></script>
 <script src="config.js"></script>
 <script src="crypto-helper.js"></script>
 <script src="app.js"></script>

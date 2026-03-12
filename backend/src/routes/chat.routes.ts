@@ -2,7 +2,6 @@ import { Router, Response } from 'express';
 import { AuthRequest, verifySupabaseToken } from '../middleware/auth';
 import { validate } from '../middleware/validation';
 import { ChatModel } from '../models/chat.model';
-import { KeysModel } from '../models/keys.model';
 import { UserModel } from '../models/user.model';
 import { MessageModel } from '../models/message.model';
 import Joi from 'joi';
@@ -13,11 +12,6 @@ const router = Router();
 const createChatSchema = Joi.object({
   type: Joi.string().valid('direct', 'group').required(),
   participant_ids: Joi.array().items(Joi.string().uuid()).min(1).required(),
-});
-
-const shareChatKeySchema = Joi.object({
-  recipient_id: Joi.string().uuid().required(),
-  encrypted_chat_key: Joi.string().required(),
 });
 
 // Get all user chats
@@ -125,103 +119,8 @@ router.post('/direct/:userId', verifySupabaseToken, async (req: AuthRequest, res
   }
 });
 
-// Share encrypted chat key with a participant
-router.post('/:chatId/share-key', verifySupabaseToken, validate(shareChatKeySchema), async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user!.id;
-    const { chatId } = req.params;
-    const { recipient_id, encrypted_chat_key } = req.body;
-
-    // Verify chat exists and user is in it
-    const chat = await ChatModel.getChatById(chatId);
-    if (!chat) {
-      res.status(404).json({ error: 'Chat not found' });
-      return;
-    }
-
-    if (!chat.participants.includes(userId)) {
-      res.status(403).json({ error: 'Not authorized' });
-      return;
-    }
-
-    // Verify recipient is in the chat
-    if (!chat.participants.includes(recipient_id)) {
-      res.status(400).json({ error: 'Recipient is not in this chat' });
-      return;
-    }
-
-    // Store encrypted chat key
-    const result = await KeysModel.shareChatKey(chatId, userId, recipient_id, encrypted_chat_key);
-
-    if (!result) {
-      res.status(500).json({ error: 'Failed to share chat key' });
-      return;
-    }
-
-    res.json({ success: true, message: 'Chat key shared successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to share chat key' });
-  }
-});
-
-// Get encrypted chat key for current user
-router.get('/:chatId/my-key', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user!.id;
-    const { chatId } = req.params;
-
-    // Verify user is in chat
-    const chat = await ChatModel.getChatById(chatId);
-    if (!chat) {
-      res.status(404).json({ error: 'Chat not found' });
-      return;
-    }
-
-    if (!chat.participants.includes(userId)) {
-      res.status(403).json({ error: 'Not authorized' });
-      return;
-    }
-
-    // Get encrypted chat key
-    const encryptedKey = await KeysModel.getChatKey(chatId, userId);
-
-    if (!encryptedKey) {
-      res.status(404).json({ error: 'Chat key not found' });
-      return;
-    }
-
-    res.json({ encrypted_chat_key: encryptedKey });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch chat key' });
-  }
-});
-
-// Get all chat keys for a chat (for history decryption)
-router.get('/:chatId/keys', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user!.id;
-    const { chatId } = req.params;
-
-    // Verify user is in chat
-    const chat = await ChatModel.getChatById(chatId);
-    if (!chat) {
-      res.status(404).json({ error: 'Chat not found' });
-      return;
-    }
-
-    if (!chat.participants.includes(userId)) {
-      res.status(403).json({ error: 'Not authorized' });
-      return;
-    }
-
-    // Get all chat keys for this chat
-    const chatKeys = await KeysModel.getAllChatKeys(chatId);
-
-    res.json({ chat_keys: chatKeys });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch chat keys' });
-  }
-});
+// Share-key / my-key / keys endpoints removed: in the new X25519 design,
+// chat keys are derived locally via ECDH and never stored on the server.
 
 // Get chat messages (history)
 router.get('/:chatId/messages', verifySupabaseToken, async (req: AuthRequest, res: Response) => {

@@ -9,15 +9,23 @@ const router = Router();
 // Validation schemas
 const uploadKeysSchema = Joi.object({
     ecdh_public_key: Joi.string().required(),
+    signing_public_key: Joi.string().optional().allow(null, ''),
+    device_public_key: Joi.string().optional().allow(null, ''),
+    device_key_signature: Joi.string().optional().allow(null, ''),
     encrypted_master_key: Joi.object({
         wrapped: Joi.string().required(),
         iv: Joi.string().required(),
-        salt: Joi.string().required()
+        salt: Joi.string().required(),
+        kdf: Joi.string().optional()
     }).required(),
     encrypted_private_key: Joi.object({
         encrypted: Joi.string().required(),
         iv: Joi.string().required()
-    }).required()
+    }).required(),
+    encrypted_signing_key: Joi.object({
+        encrypted: Joi.string().required(),
+        iv: Joi.string().required()
+    }).optional().allow(null)
 });
 
 const updateMasterKeySchema = Joi.object({
@@ -39,14 +47,18 @@ router.post('/', verifySupabaseToken, async (req: AuthRequest, res: Response) =>
             return;
         }
 
-        const { ecdh_public_key, encrypted_master_key, encrypted_private_key } = req.body;
+        const { ecdh_public_key, signing_public_key, device_public_key, device_key_signature, encrypted_master_key, encrypted_private_key, encrypted_signing_key } = req.body;
         const userId = req.user!.id;
 
         await KeysModel.uploadUserKeys(
             userId,
             ecdh_public_key,
+            signing_public_key || null,
+            device_public_key || null,
+            device_key_signature || null,
             JSON.stringify(encrypted_master_key),
-            JSON.stringify(encrypted_private_key)
+            JSON.stringify(encrypted_private_key),
+            encrypted_signing_key ? JSON.stringify(encrypted_signing_key) : null
         );
 
         logger.info('✅ User keys uploaded:', userId);
@@ -79,7 +91,9 @@ router.get('/:userId', verifySupabaseToken, async (req: AuthRequest, res: Respon
         res.json({
             encrypted_master_key: JSON.parse(keys.encrypted_master_key),
             encrypted_private_key: JSON.parse(keys.encrypted_rsa_private_key),
-            ecdh_public_key: keys.public_key
+            encrypted_signing_key: keys.encrypted_signing_key ? JSON.parse(keys.encrypted_signing_key) : null,
+            ecdh_public_key: keys.public_key,
+            signing_public_key: keys.signing_public_key || null
         });
     } catch (error) {
         logger.error('Error getting keys:', error);

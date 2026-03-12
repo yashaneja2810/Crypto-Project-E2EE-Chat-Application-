@@ -109,8 +109,7 @@ async function handleExistingSession(session) {
         }
 
         updateDebugLog('🔄 Loading encrypted RSA keys...');
-        let keys = await cryptoHelper.loadCachedServerKeys();
-        if (keys) {
+        let keys = await cryptoHelper.loadCachedServerKeys();        if (keys) {
             updateDebugLog('✅ Keys loaded from local cache (no network needed)');
         } else {
             updateDebugLog('🔄 Cache empty — downloading from server...');
@@ -133,11 +132,20 @@ async function handleExistingSession(session) {
             await cryptoHelper.storeCachedServerKeys(keys);
         }
 
-        updateDebugLog('🔄 Decrypting ECDH private key...');
+        updateDebugLog('🔄 Decrypting X25519 + Ed25519 keys...');
         try {
             cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(keys.encrypted_private_key, masterKey);
-            cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
-            updateDebugLog('✅ ECDH keys decrypted and ready');
+            cryptoHelper.publicKey  = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
+            if (keys.encrypted_signing_key && keys.signing_public_key) {
+                cryptoHelper.signingKey = await cryptoHelper.decryptSigningKey(keys.encrypted_signing_key, masterKey);
+                cryptoHelper.verifyKey  = await cryptoHelper.importSigningPublicKey(keys.signing_public_key);
+            }
+            const deviceLoaded = await cryptoHelper.loadDeviceIdentityKey(masterKey);
+            if (!deviceLoaded) {
+                await cryptoHelper.generateDeviceIdentityKey();
+                await cryptoHelper.storeDeviceIdentityKey(masterKey);
+            }
+            updateDebugLog('✅ All keys decrypted and ready');
         } catch (decryptError) {
             updateDebugLog('❌ Failed to decrypt keys - master key mismatch');
             showAlert('error', 'Encryption key mismatch. This account may be corrupted. Please delete your account and sign up again.');
@@ -178,11 +186,11 @@ async function handleSignup() {
         const masterKey = await cryptoHelper.generateMasterKey();
         updateDebugLog('✅ Step 1: Master key generated! (256-bit AES-GCM, random)');
 
-        updateDebugLog('🔄 Step 2: Encrypting master key with password...');
-        const encryptedMasterKey = await cryptoHelper.encryptMasterKeyWithPassword(masterKey, password, email);
-        updateDebugLog('✅ Step 2: Master key encrypted! (PBKDF2 100k iterations)');
+        updateDebugLog('🔄 Step 2: Encrypting master key with password (Argon2id)...');
+        const encryptedMasterKey = await cryptoHelper.encryptMasterKeyWithPassword(masterKey, password);
+        updateDebugLog('✅ Step 2: Master key encrypted! (Argon2id: 64 MiB, 3 iterations)');
 
-        updateDebugLog('🔄 Step 3: Deriving auth password...');
+        updateDebugLog('🔄 Step 3: Deriving auth password (Argon2id)...');
         const authPassword = await cryptoHelper.deriveAuthPassword(password, email);
         updateDebugLog('✅ Step 3: Auth password derived! (SHA-256)');
 
@@ -205,20 +213,35 @@ async function handleSignup() {
             }
             updateDebugLog('✅ Step 5: Profile created!');
 
-            updateDebugLog('🔄 Step 6: Generating ECDH key pair (P-256)...');
+            updateDebugLog('🔄 Step 6: Generating X25519 keypair + Ed25519 signing key...');
             await cryptoHelper.generateUserKeys();
-            updateDebugLog('✅ Step 6: ECDH keys generated!');
+            await cryptoHelper.generateSigningKeys();
+            updateDebugLog('✅ Step 6: X25519 + Ed25519 keys generated!');
 
-            updateDebugLog('🔄 Step 7: Encrypting ECDH private key with master key...');
-            const encryptedPrivateKey = await cryptoHelper.encryptPrivateKey(cryptoHelper.privateKey, masterKey);
-            updateDebugLog('✅ Step 7: ECDH private key encrypted!');
+            updateDebugLog('🔄 Step 7: Generating device identity key (Ed25519)...');
+            await cryptoHelper.generateDeviceIdentityKey();
+            const devicePubBase64 = await cryptoHelper.exportDevicePublicKey();
+            const deviceKeySig = await cryptoHelper.signUserPublicKeyWithDevice(await cryptoHelper.exportPublicKey());
+            updateDebugLog('✅ Step 7: Device identity key generated and user pubkey signed!');
 
-            updateDebugLog('🔄 Step 8: Storing master key on device (IndexedDB)...');
+            updateDebugLog('🔄 Step 8: Encrypting private keys with master key...');
+            const encryptedPrivateKey  = await cryptoHelper.encryptPrivateKey(cryptoHelper.privateKey, masterKey);
+            const encryptedSigningKey  = await cryptoHelper.encryptSigningKey(cryptoHelper.signingKey, masterKey);
+            updateDebugLog('✅ Step 8: X25519 + Ed25519 private keys encrypted!');
+
+            updateDebugLog('🔄 Step 9: Storing master key + device identity key on device...');
             await cryptoHelper.storeMasterKeyInIndexedDB(masterKey);
-            updateDebugLog('✅ Step 8: Master key stored locally! (Fast login next time)');
+            await cryptoHelper.storeDeviceIdentityKey(masterKey);
+            updateDebugLog('✅ Step 9: Keys stored locally!');
 
-            updateDebugLog('🔄 Step 9: Uploading encrypted keys to server...');
+            updateDebugLog('🔄 Step 10: Generating one-time prekeys for forward secrecy...');
+            const prekeys = await cryptoHelper.generatePrekeys(10);
+            await cryptoHelper.storePrekeyBundle(prekeys, masterKey);
+            updateDebugLog('✅ Step 10: 10 one-time prekeys generated and stored locally!');
+
+            updateDebugLog('🔄 Step 11: Uploading encrypted keys + prekeys to server...');
             const publicKeyBase64 = await cryptoHelper.exportPublicKey();
+            const signingPublicBase64 = await cryptoHelper.exportSigningPublicKey();
             const response = await fetch(`${BACKEND_URL}/api/keys`, {
                 method: 'POST',
                 headers: {
@@ -227,19 +250,38 @@ async function handleSignup() {
                 },
                 body: JSON.stringify({
                     ecdh_public_key: publicKeyBase64,
+                    signing_public_key: signingPublicBase64,
+                    device_public_key: devicePubBase64,
+                    device_key_signature: deviceKeySig,
                     encrypted_master_key: encryptedMasterKey,
                     encrypted_private_key: encryptedPrivateKey,
+                    encrypted_signing_key: encryptedSigningKey,
                 }),
             });
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(`Failed to upload keys: ${errorData.error || response.statusText}`);
             }
-            updateDebugLog('✅ Step 9: All encrypted keys uploaded!');
 
-            updateDebugLog('🔄 Step 10: Generating account recovery key...');
+            // Upload prekey public keys to server (private halves stay local)
+            const prekeyPayload = cryptoHelper.prekeyServerPayload(prekeys);
+            const prekeyRes = await fetch(`${BACKEND_URL}/api/prekeys`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${data.session.access_token}`,
+                },
+                body: JSON.stringify({ prekeys: prekeyPayload }),
+            });
+            if (!prekeyRes.ok) {
+                updateDebugLog('⚠️ Prekey upload failed (non-fatal, will retry on next login)');
+            } else {
+                updateDebugLog('✅ Step 11: All keys uploaded!');
+            }
+
+            updateDebugLog('🔄 Step 12: Generating account recovery key...');
             const recoveryKey = await cryptoHelper.generateRecoveryKey(masterKey);
-            updateDebugLog('✅ Step 10: Recovery key generated!');
+            updateDebugLog('✅ Step 12: Recovery key generated!');
 
             showRecoveryKey(recoveryKey, email);
             updateDebugLog('🎉 Zero-Knowledge setup complete!');
@@ -278,7 +320,7 @@ async function handleLogin() {
             updateDebugLog('⚠️ Step 1: Master key not on device (first login on this device)');
         }
 
-        updateDebugLog('🔄 Step 2: Deriving auth password...');
+        updateDebugLog('🔄 Step 2: Deriving auth password (Argon2id)...');
         const authPassword = await cryptoHelper.deriveAuthPassword(password, email);
         updateDebugLog('✅ Step 2: Auth password derived!');
 
@@ -299,7 +341,7 @@ async function handleLogin() {
             const keys = await response.json();
             updateDebugLog('✅ Step 4: Encrypted keys downloaded!');
 
-            updateDebugLog('🔄 Step 5: Decrypting master key with password...');
+            updateDebugLog('🔄 Step 5: Decrypting master key with password (Argon2id)...');
             masterKey = await cryptoHelper.decryptMasterKeyWithPassword(keys.encrypted_master_key, password);
             updateDebugLog('✅ Step 5: Master key decrypted!');
 
@@ -310,12 +352,24 @@ async function handleLogin() {
             await cryptoHelper.storeCachedServerKeys(keys);
             updateDebugLog('✅ Server keys cached locally!');
 
-            updateDebugLog('🔄 Step 7: Decrypting ECDH private key...');
+            updateDebugLog('🔄 Step 7: Decrypting X25519 + Ed25519 keys...');
             try {
                 cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(keys.encrypted_private_key, masterKey);
-                updateDebugLog('✅ Step 7: ECDH private key decrypted!');
+                updateDebugLog('✅ Step 7: X25519 private key decrypted!');
                 cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
-                updateDebugLog('✅ ECDH public key loaded!');
+                updateDebugLog('✅ X25519 public key loaded!');
+                if (keys.encrypted_signing_key && keys.signing_public_key) {
+                    cryptoHelper.signingKey = await cryptoHelper.decryptSigningKey(keys.encrypted_signing_key, masterKey);
+                    cryptoHelper.verifyKey  = await cryptoHelper.importSigningPublicKey(keys.signing_public_key);
+                    updateDebugLog('✅ Ed25519 signing key decrypted!');
+                }
+                const deviceLoaded = await cryptoHelper.loadDeviceIdentityKey(masterKey);
+                if (!deviceLoaded) {
+                    updateDebugLog('⚠️ No device identity key on this device — generating new one...');
+                    await cryptoHelper.generateDeviceIdentityKey();
+                    await cryptoHelper.storeDeviceIdentityKey(masterKey);
+                    updateDebugLog('✅ New device identity key created for this device!');
+                }
             } catch (decryptError) {
                 updateDebugLog('❌ Master key mismatch - wrong password or corrupted account');
                 throw new Error('Wrong password or corrupted account. Please verify your password or sign up again.');
@@ -336,12 +390,23 @@ async function handleLogin() {
                 await cryptoHelper.storeCachedServerKeys(keys);
             }
 
-            updateDebugLog('🔄 Step 5: Decrypting ECDH private key with cached master key...');
+            updateDebugLog('🔄 Step 5: Decrypting X25519 + Ed25519 keys with cached master key...');
             try {
                 cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(keys.encrypted_private_key, masterKey);
-                updateDebugLog('✅ Step 5: ECDH private key decrypted!');
+                updateDebugLog('✅ Step 5: X25519 private key decrypted!');
                 cryptoHelper.publicKey = await cryptoHelper.importPublicKey(keys.ecdh_public_key);
-                updateDebugLog('✅ ECDH public key loaded!');
+                updateDebugLog('✅ X25519 public key loaded!');
+                if (keys.encrypted_signing_key && keys.signing_public_key) {
+                    cryptoHelper.signingKey = await cryptoHelper.decryptSigningKey(keys.encrypted_signing_key, masterKey);
+                    cryptoHelper.verifyKey  = await cryptoHelper.importSigningPublicKey(keys.signing_public_key);
+                    updateDebugLog('✅ Ed25519 signing key decrypted!');
+                }
+                const deviceLoaded = await cryptoHelper.loadDeviceIdentityKey(masterKey);
+                if (!deviceLoaded) {
+                    await cryptoHelper.generateDeviceIdentityKey();
+                    await cryptoHelper.storeDeviceIdentityKey(masterKey);
+                    updateDebugLog('✅ New device identity key created for this device!');
+                }
             } catch (decryptError) {
                 updateDebugLog('⚠️ Master key / cached keys mismatch — fetching fresh copies from server...');
                 await cryptoHelper.clearMasterKeyFromIndexedDB();
@@ -354,7 +419,7 @@ async function handleLogin() {
                 if (!freshResponse.ok) throw new Error('Failed to fetch keys from server');
                 const freshKeys = await freshResponse.json();
 
-                updateDebugLog('🔄 Decrypting master key with password...');
+                updateDebugLog('🔄 Decrypting master key with password (Argon2id)...');
                 masterKey = await cryptoHelper.decryptMasterKeyWithPassword(freshKeys.encrypted_master_key, password);
                 updateDebugLog('✅ Master key decrypted!');
 
@@ -362,8 +427,14 @@ async function handleLogin() {
                 await cryptoHelper.storeCachedServerKeys(freshKeys);
 
                 cryptoHelper.privateKey = await cryptoHelper.decryptPrivateKey(freshKeys.encrypted_private_key, masterKey);
-                cryptoHelper.publicKey = await cryptoHelper.importPublicKey(freshKeys.ecdh_public_key);
-                updateDebugLog('✅ ECDH keys recovered and cached!');
+                cryptoHelper.publicKey  = await cryptoHelper.importPublicKey(freshKeys.ecdh_public_key);
+                if (freshKeys.encrypted_signing_key && freshKeys.signing_public_key) {
+                    cryptoHelper.signingKey = await cryptoHelper.decryptSigningKey(freshKeys.encrypted_signing_key, masterKey);
+                    cryptoHelper.verifyKey  = await cryptoHelper.importSigningPublicKey(freshKeys.signing_public_key);
+                }
+                await cryptoHelper.generateDeviceIdentityKey();
+                await cryptoHelper.storeDeviceIdentityKey(masterKey);
+                updateDebugLog('✅ Keys recovered, cached and device identity created!');
             }
         }
 
@@ -630,6 +701,23 @@ async function getProfile(userId) {
     } catch { return null; }
 }
 
+// Cache for public key bundles (ecdh + signing public keys for signature verification)
+const publicKeyBundleCache = new Map();
+
+async function getPublicKeyBundle(userId) {
+    if (publicKeyBundleCache.has(userId)) return publicKeyBundleCache.get(userId);
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    try {
+        const r = await fetch(`${BACKEND_URL}/api/users/${userId}/public-key`, {
+            headers: { 'Authorization': `Bearer ${session.access_token}` },
+        });
+        if (!r.ok) return null;
+        const body = await r.json();
+        publicKeyBundleCache.set(userId, body);
+        return body;
+    } catch { return null; }
+}
+
 /**
  * Load recent chats into sidebar
  */
@@ -782,6 +870,9 @@ async function sendMessage() {
     if (!message || !currentChatId) return;
 
     try {
+        const signature = cryptoHelper.signingKey
+            ? await cryptoHelper.signMessage(message)
+            : null;
         const { encrypted, iv } = await cryptoHelper.encryptMessage(message, currentChatId);
 
         displaySentMessage(message);
@@ -790,6 +881,7 @@ async function sendMessage() {
             chatId: currentChatId,
             encryptedContent: encrypted,
             iv: iv,
+            signature,
             messageType: 'text',
         });
 
@@ -841,6 +933,19 @@ async function displayReceivedMessage(data) {
             data.encrypted_content, data.iv, chatId
         );
 
+        // Verify Ed25519 signature if present
+        let verified = false;
+        if (data.signature) {
+            try {
+                const signerProfile = await getPublicKeyBundle(data.sender_id);
+                if (signerProfile?.signing_public_key) {
+                    verified = await cryptoHelper.verifyMessage(
+                        plaintext, data.signature, signerProfile.signing_public_key
+                    );
+                }
+            } catch { /* non-fatal: display warning instead */ }
+        }
+
         // If this chat isn't in sidebar yet, add it (new chat started by the other user)
         if (!recentChatsData.has(chatId)) {
             const profile = data.sender_id ? await getProfile(data.sender_id) : null;
@@ -859,8 +964,12 @@ async function displayReceivedMessage(data) {
         const messagesDiv = document.getElementById('messages');
         const messageDiv = document.createElement('div');
         messageDiv.className = 'msg-group received';
+        const sigTag = data.signature
+            ? (verified ? '<span style="font-size:10px;color:#0f0;margin-left:4px" title="Signature verified">✓</span>'
+                        : '<span style="font-size:10px;color:#f80;margin-left:4px" title="Signature unverified">!</span>')
+            : '';
         messageDiv.innerHTML = `
-            <div class="msg-bubble">${escapeHtml(plaintext)}</div>
+            <div class="msg-bubble">${escapeHtml(plaintext)}${sigTag}</div>
             <div class="message-time">${new Date().toLocaleTimeString()}</div>
         `;
         messagesDiv.appendChild(messageDiv);
