@@ -266,7 +266,7 @@ class CryptoHelper {
         const payload = JSON.stringify(prekeys.map(p => ({
             public_key:  p.public_key,
             signature:   p.signature,
-            priv_bytes:  p._privateBytes,
+            priv_bytes:  p._privateBytes || p.priv_bytes,
         })));
         const iv  = _crypto.getRandomValues(new Uint8Array(12));
         const enc = await _subtle.encrypt(

@@ -142,8 +142,8 @@ router.get('/:chatId/messages', verifySupabaseToken, async (req: AuthRequest, re
       return;
     }
 
-    // Get messages
-    const messages = await MessageModel.getMessages(chatId, limit, before);
+    // Get messages (pass userId so deleted_for filtering works)
+    const messages = await MessageModel.getMessages(chatId, limit, before, userId);
 
     res.json({ messages });
   } catch (error) {

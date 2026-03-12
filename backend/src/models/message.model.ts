@@ -53,7 +53,7 @@ export class MessageModel {
   /**
    * Get messages for a chat
    */
-  static async getMessages(chatId: string, limit: number = 50, before?: string): Promise<Message[]> {
+  static async getMessages(chatId: string, limit: number = 50, before?: string, userId?: string): Promise<Message[]> {
     try {
       let query = supabaseAdmin
         .from('messages')
@@ -69,7 +69,14 @@ export class MessageModel {
       const { data, error } = await query;
 
       if (error) throw error;
-      return (data || []).reverse();
+      let messages = (data || []).reverse();
+
+      // Filter out messages deleted by this user
+      if (userId) {
+        messages = messages.filter((m: any) => !(m.deleted_for && m.deleted_for.includes(userId)));
+      }
+
+      return messages;
     } catch (error) {
       logger.error('Error getting messages:', error);
       return [];
@@ -118,23 +125,58 @@ export class MessageModel {
   }
 
   /**
-   * Delete message (soft delete by removing content)
+   * Unsend message — clears content for everyone. Sender only.
    */
-  static async deleteMessage(messageId: string, userId: string): Promise<boolean> {
+  static async unsendMessage(messageId: string, userId: string): Promise<{ chatId: string } | null> {
     try {
-      const { error } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from('messages')
         .update({
           encrypted_content: '',
-          metadata: { deleted: true },
+          metadata: { unsent: true },
         })
         .eq('id', messageId)
-        .eq('sender_id', userId);
+        .eq('sender_id', userId)
+        .select('chat_id')
+        .single();
+
+      if (error) throw error;
+      return { chatId: data.chat_id };
+    } catch (error) {
+      logger.error('Error unsending message:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Delete message for the current user only.
+   * Appends userId to the deleted_for array.
+   */
+  static async deleteForMe(messageId: string, userId: string): Promise<boolean> {
+    try {
+      // Use raw SQL via rpc to append to array, or fetch-then-update
+      const { data: msg, error: fetchError } = await supabaseAdmin
+        .from('messages')
+        .select('deleted_for')
+        .eq('id', messageId)
+        .single();
+
+      if (fetchError || !msg) return false;
+
+      const deletedFor: string[] = msg.deleted_for || [];
+      if (!deletedFor.includes(userId)) {
+        deletedFor.push(userId);
+      }
+
+      const { error } = await supabaseAdmin
+        .from('messages')
+        .update({ deleted_for: deletedFor })
+        .eq('id', messageId);
 
       if (error) throw error;
       return true;
     } catch (error) {
-      logger.error('Error deleting message:', error);
+      logger.error('Error deleting message for user:', error);
       return false;
     }
   }
@@ -155,6 +197,24 @@ export class MessageModel {
     } catch (error) {
       logger.error('Error deleting expired messages:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Clear all messages in a chat for a user (hard delete all messages)
+   */
+  static async clearChat(chatId: string): Promise<boolean> {
+    try {
+      const { error } = await supabaseAdmin
+        .from('messages')
+        .delete()
+        .eq('chat_id', chatId);
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      logger.error('Error clearing chat:', error);
+      return false;
     }
   }
 
