@@ -82,6 +82,7 @@ app.use('/api/prekeys', prekeysRouter);
 
 // Setup WebSocket
 setupSocketIO(io);
+app.set('io', io);
 
 // Error handling
 app.use(errorHandler);

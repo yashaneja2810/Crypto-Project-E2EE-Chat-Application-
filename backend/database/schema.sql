@@ -90,6 +90,7 @@ CREATE TABLE messages (
     encryption_key_id TEXT NOT NULL DEFAULT 'default', -- Reference to which key was used
     reply_to UUID REFERENCES messages(id),
     expires_at TIMESTAMP WITH TIME ZONE, -- For self-destructing messages
+    deleted_for UUID[] DEFAULT '{}', -- Users who deleted this message for themselves
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

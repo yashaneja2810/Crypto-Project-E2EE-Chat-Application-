@@ -59,6 +59,10 @@ export function setupSocketIO(io: SocketIOServer): void {
     // Notify friends about online status
     await broadcastPresence(io, userId, 'online');
 
+    // Send this socket the full list of currently online users
+    const onlineUserIds = Array.from(connectedUsers.keys());
+    socket.emit('presence:online-list', { users: onlineUserIds });
+
     // Load user's chats and join chat rooms
     const chats = await ChatModel.getUserChats(userId);
     for (const chat of chats) {

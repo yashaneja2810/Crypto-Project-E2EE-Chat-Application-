@@ -28,6 +28,8 @@ const alertContainer = document.getElementById('alertContainer');
 let currentRecipientName = null;
 const recentChatsData = new Map(); // chatId -> { name, recipientId, lastMsg, lastTime, unreadCount }
 const profileCache    = new Map(); // userId -> profile object
+const onlineUsers     = new Set(); // Set of userId strings currently online
+let typingTimer       = null;      // Debounce timer for typing stop
 
 function getDisplayName(profile, id) {
     if (!profile) return (id || '?').substring(0, 8) + '\u2026';
@@ -47,6 +49,34 @@ function formatTime(iso) {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+// Update presence indicators across the UI
+function updatePresenceUI(userId, status) {
+    // Update sidebar online dots
+    for (const [chatId, data] of recentChatsData) {
+        if (data.recipientId === userId) {
+            const dot = document.querySelector(`#chat-item-${chatId} .online-dot`);
+            if (dot) dot.classList.toggle('visible', status === 'online');
+        }
+    }
+    // Update topbar status if this is the current chat recipient
+    if (userId === currentRecipientId) {
+        setRecipientStatus(userId);
+    }
+}
+
+// Set topbar status text for a specific user
+function setRecipientStatus(userId) {
+    const statusEl = document.getElementById('recipientStatus');
+    if (!statusEl) return;
+    if (onlineUsers.has(userId)) {
+        statusEl.textContent = 'online';
+        statusEl.className = 'topbar-status online';
+    } else {
+        statusEl.textContent = 'offline';
+        statusEl.className = 'topbar-status';
+    }
+}
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     const { data: { session } } = await supabaseClient.auth.getSession();
@@ -58,6 +88,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('sendBtn').addEventListener('click', sendMessage);
     document.getElementById('messageInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') sendMessage();
+    });
+    document.getElementById('messageInput').addEventListener('input', () => {
+        if (!socket || !currentChatId) return;
+        socket.emit('typing:start', { chatId: currentChatId });
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => {
+            socket.emit('typing:stop', { chatId: currentChatId });
+        }, 2000);
+    });
+
+    // Clear chat button
+    document.getElementById('clearChatBtn').addEventListener('click', handleClearChat);
+
+    // Right-click context menu on messages
+    document.getElementById('messages').addEventListener('contextmenu', handleMsgContextMenu);
+    document.addEventListener('click', () => {
+        document.getElementById('msgContextMenu').classList.remove('open');
     });
 
     // User search with 300 ms debounce
@@ -441,10 +488,60 @@ async function handleLogin() {
         updateDebugLog('🎉 Login complete! All encryption keys ready.');
         showAlert('success', 'Login successful! Loading your chats...');
         await initializeChat();
+
+        // Auto-replenish prekeys if running low (threshold: 5)
+        replenishPrekeysIfNeeded(data.session.access_token, masterKey);
     } catch (error) {
         console.error('Login error:', error);
         showAlert('error', error.message);
         updateDebugLog(`❌ Error: ${error.message}`);
+    }
+}
+
+/**
+ * Check server-side prekey count and upload more if below threshold.
+ * Runs in background after login — does not block the UI.
+ */
+async function replenishPrekeysIfNeeded(accessToken, masterKey) {
+    const THRESHOLD = 5;
+    const BATCH_SIZE = 10;
+    try {
+        const res = await fetch(`${BACKEND_URL}/api/prekeys/count/me`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return;
+        const { remaining } = await res.json();
+
+        if (remaining >= THRESHOLD) {
+            updateDebugLog(`🔑 Prekeys OK (${remaining} remaining)`);
+            return;
+        }
+
+        updateDebugLog(`⚠️ Prekeys low (${remaining} remaining) — generating ${BATCH_SIZE} more...`);
+        const newPrekeys = await cryptoHelper.generatePrekeys(BATCH_SIZE);
+
+        // Merge new prekeys with any remaining local prekeys
+        const existingBundle = await cryptoHelper.loadPrekeyBundle(masterKey);
+        const merged = existingBundle.concat(newPrekeys);
+        await cryptoHelper.storePrekeyBundle(merged, masterKey);
+
+        const payload = cryptoHelper.prekeyServerPayload(newPrekeys);
+        const uploadRes = await fetch(`${BACKEND_URL}/api/prekeys`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({ prekeys: payload }),
+        });
+
+        if (uploadRes.ok) {
+            updateDebugLog(`✅ Prekeys replenished! Uploaded ${BATCH_SIZE} new prekeys.`);
+        } else {
+            updateDebugLog('⚠️ Prekey replenishment upload failed (will retry next login)');
+        }
+    } catch (err) {
+        console.error('Prekey replenishment error:', err);
     }
 }
 
@@ -465,6 +562,13 @@ async function handleLogout() {
     currentRecipientName = null;
     recentChatsData.clear();
     profileCache.clear();
+    onlineUsers.clear();
+
+    // Reset chat UI to empty state
+    document.getElementById('activeChatArea').style.display = 'none';
+    document.getElementById('emptyState').style.display = '';
+    document.getElementById('messages').innerHTML = '';
+    document.getElementById('recentChats').innerHTML = '';
 
     chatSection.style.display = 'none';
     authSection.style.display = 'block';
@@ -497,6 +601,13 @@ async function initializeChat() {
             updateChatDebugLog('🟢 Connected to real-time server');
         });
 
+        // Receive full list of online users on connect
+        socket.on('presence:online-list', (data) => {
+            onlineUsers.clear();
+            for (const uid of data.users) onlineUsers.add(uid);
+            renderAllChatItems();
+        });
+
         socket.on('disconnect', () => {
             console.log('❌ Disconnected from Socket.IO server');
             updateChatDebugLog('🔴 Disconnected from server');
@@ -524,8 +635,48 @@ async function initializeChat() {
 
         socket.on('message:receive', async (data) => {
             console.log('📨 Message received:', data);
-            if (data.sender_id === currentUser.id) return; // skip own echo
+            if (data.sender_id === currentUser.id) {
+                // Own echo — attach the server-assigned message ID to the last sent bubble
+                const msgs = document.getElementById('messages');
+                const sentBubbles = msgs?.querySelectorAll('.msg-group.sent:not([data-msg-id])');
+                if (sentBubbles && sentBubbles.length > 0) {
+                    const lastSent = sentBubbles[sentBubbles.length - 1];
+                    lastSent.dataset.msgId = data.id;
+                }
+                return;
+            }
             await displayReceivedMessage(data);
+        });
+
+        // Online / offline presence
+        socket.on('presence:update', (data) => {
+            if (data.status === 'online') {
+                onlineUsers.add(data.userId);
+            } else {
+                onlineUsers.delete(data.userId);
+            }
+            updatePresenceUI(data.userId, data.status);
+        });
+
+        // Typing indicator
+        socket.on('typing:update', (data) => {
+            if (data.chatId !== currentChatId) return;
+            const statusEl = document.getElementById('recipientStatus');
+            if (!statusEl) return;
+            if (data.isTyping) {
+                statusEl.textContent = 'typing...';
+                statusEl.className = 'topbar-status typing';
+            } else {
+                setRecipientStatus(data.userId);
+            }
+        });
+
+        socket.on('message:unsend', (data) => {
+            const el = document.querySelector(`[data-msg-id="${data.messageId}"]`);
+            if (el) {
+                const bubble = el.querySelector('.msg-bubble');
+                if (bubble) { bubble.style.color = '#888'; bubble.style.fontStyle = 'italic'; bubble.textContent = '\ud83d\udeab Message unsent'; }
+            }
         });
 
         // Show chat UI
@@ -567,6 +718,7 @@ async function openChat(chatId, recipientId, name) {
     document.getElementById('recipientNameDisplay').textContent = name;
     const topAvatar = document.getElementById('topbarAvatar');
     if (topAvatar) topAvatar.textContent = getInitial(name);
+    setRecipientStatus(recipientId);
 
     await ensureChatKey(chatId, recipientId);
     await loadMessageHistory(chatId);
@@ -626,15 +778,29 @@ async function loadMessageHistory(chatId, retryAttempt = 0) {
 
         for (const message of messages) {
             try {
+                const messageDiv = document.createElement('div');
+                const isSent = message.sender_id === currentUser.id;
+                messageDiv.className = `msg-group ${isSent ? 'sent' : 'received'}`;
+                messageDiv.dataset.msgId = message.id;
+                messageDiv.dataset.senderId = message.sender_id;
+
+                // Handle unsent messages BEFORE trying to decrypt
+                if (message.metadata?.unsent) {
+                    messageDiv.innerHTML = `
+                        <div class="msg-bubble" style="color:#888;font-style:italic">🚫 Message unsent</div>
+                        <div class="message-time">${new Date(message.created_at).toLocaleTimeString()}</div>
+                    `;
+                    messagesDiv.appendChild(messageDiv);
+                    decryptedCount++;
+                    continue;
+                }
+
                 const plaintext = await cryptoHelper.decryptMessage(
                     message.encrypted_content,
                     message.metadata?.iv || '',
                     chatId
                 );
 
-                const messageDiv = document.createElement('div');
-                const isSent = message.sender_id === currentUser.id;
-                messageDiv.className = `msg-group ${isSent ? 'sent' : 'received'}`;
                 messageDiv.innerHTML = `
                     <div class="msg-bubble">${escapeHtml(plaintext)}</div>
                     <div class="message-time">${new Date(message.created_at).toLocaleTimeString()}</div>
@@ -764,8 +930,9 @@ function renderChatItem(chatId, data) {
     el.className = 'chat-item' + (chatId === currentChatId ? ' active' : '');
     el.id = `chat-item-${chatId}`;
     el.onclick = () => openChat(chatId, data.recipientId, data.name);
+    const isOnline = onlineUsers.has(data.recipientId);
     el.innerHTML = `
-        <div class="chat-item-avatar">${getInitial(data.name)}</div>
+        <div class="chat-item-avatar">${getInitial(data.name)}<span class="online-dot${isOnline ? ' visible' : ''}"></span></div>
         <div class="chat-item-info">
             <div class="chat-item-name">${escapeHtml(data.name)}</div>
             <div class="chat-item-preview">${escapeHtml(data.lastMsg || 'Tap to open')}</div>
@@ -886,6 +1053,8 @@ async function sendMessage() {
         });
 
         input.value = '';
+        clearTimeout(typingTimer);
+        socket.emit('typing:stop', { chatId: currentChatId });
     } catch (error) {
         console.error('Failed to send message:', error);
         showAlert('error', 'Failed to send message');
@@ -900,6 +1069,8 @@ function displaySentMessage(plaintext) {
     const messagesDiv = document.getElementById('messages');
     const messageDiv = document.createElement('div');
     messageDiv.className = 'msg-group sent';
+    messageDiv.dataset.senderId = currentUser.id;
+    // data-msg-id intentionally NOT set here — will be set when socket echo arrives with server ID
     messageDiv.innerHTML = `
         <div class="msg-bubble">${escapeHtml(plaintext)}</div>
         <div class="message-time">${new Date().toLocaleTimeString()}</div>
@@ -964,6 +1135,8 @@ async function displayReceivedMessage(data) {
         const messagesDiv = document.getElementById('messages');
         const messageDiv = document.createElement('div');
         messageDiv.className = 'msg-group received';
+        if (data.id) messageDiv.dataset.msgId = data.id;
+        messageDiv.dataset.senderId = data.sender_id || '';
         const sigTag = data.signature
             ? (verified ? '<span style="font-size:10px;color:#0f0;margin-left:4px" title="Signature verified">✓</span>'
                         : '<span style="font-size:10px;color:#f80;margin-left:4px" title="Signature unverified">!</span>')
@@ -985,6 +1158,99 @@ async function displayReceivedMessage(data) {
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
     }
+}
+
+/**
+ * Handle clear chat — delete all messages in current chat
+ */
+async function handleClearChat() {
+    if (!currentChatId) return;
+    if (!confirm('Delete all messages in this chat? This cannot be undone.')) return;
+
+    try {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        const res = await fetch(`${BACKEND_URL}/api/messages/chat/${currentChatId}/clear`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${session.access_token}` },
+        });
+        if (!res.ok) throw new Error('Server refused');
+        document.getElementById('messages').innerHTML = '';
+        updateRecentChat(currentChatId, '', new Date().toISOString());
+        updateChatDebugLog('🗑️ Chat cleared');
+    } catch (err) {
+        console.error('Clear chat error:', err);
+        showAlert('error', 'Failed to clear chat');
+    }
+}
+
+/**
+ * Right-click context menu on a message bubble
+ */
+let ctxTargetMsgEl = null;
+function handleMsgContextMenu(e) {
+    const msgGroup = e.target.closest('.msg-group');
+    if (!msgGroup) return;
+    e.preventDefault();
+
+    ctxTargetMsgEl = msgGroup;
+    const menu = document.getElementById('msgContextMenu');
+    menu.classList.add('open');
+    // Position menu, then clamp so it stays on screen
+    const menuRect = menu.getBoundingClientRect();
+    const x = Math.min(e.clientX, window.innerWidth - menuRect.width - 8);
+    const y = Math.min(e.clientY, window.innerHeight - menuRect.height - 8);
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+
+    // Show "Unsend" only for own messages
+    const unsendBtn = document.getElementById('ctxUnsendMsg');
+    const deleteForMeBtn = document.getElementById('ctxDeleteForMe');
+    const isMine = msgGroup.dataset.senderId === currentUser.id;
+    unsendBtn.style.display = isMine ? '' : 'none';
+
+    unsendBtn.onclick = async () => {
+        menu.classList.remove('open');
+        const msgId = ctxTargetMsgEl?.dataset?.msgId;
+        if (!msgId) { ctxTargetMsgEl.remove(); return; }
+        try {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            const res = await fetch(`${BACKEND_URL}/api/messages/${msgId}/unsend`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${session.access_token}` },
+            });
+            if (res.ok) {
+                // Replace bubble with unsent placeholder
+                const bubble = ctxTargetMsgEl.querySelector('.msg-bubble');
+                if (bubble) { bubble.style.color = '#888'; bubble.style.fontStyle = 'italic'; bubble.textContent = '\ud83d\udeab Message unsent'; }
+            } else {
+                showAlert('error', 'Could not unsend message');
+            }
+        } catch (err) {
+            console.error('Unsend error:', err);
+            showAlert('error', 'Failed to unsend message');
+        }
+    };
+
+    deleteForMeBtn.onclick = async () => {
+        menu.classList.remove('open');
+        const msgId = ctxTargetMsgEl?.dataset?.msgId;
+        if (!msgId) { ctxTargetMsgEl.remove(); return; }
+        try {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            const res = await fetch(`${BACKEND_URL}/api/messages/${msgId}/delete-for-me`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${session.access_token}` },
+            });
+            if (res.ok) {
+                ctxTargetMsgEl.remove();
+            } else {
+                showAlert('error', 'Could not delete message');
+            }
+        } catch (err) {
+            console.error('Delete-for-me error:', err);
+            showAlert('error', 'Failed to delete message');
+        }
+    };
 }
 
 /**

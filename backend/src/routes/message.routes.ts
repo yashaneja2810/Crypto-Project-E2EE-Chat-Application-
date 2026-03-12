@@ -33,7 +33,7 @@ router.get('/:chatId', verifySupabaseToken, async (req: AuthRequest, res: Respon
       return;
     }
 
-    const messages = await MessageModel.getMessages(chatId, limit, before);
+    const messages = await MessageModel.getMessages(chatId, limit, before, userId);
     res.json({ messages });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get messages' });
@@ -83,14 +83,62 @@ router.post('/', verifySupabaseToken, validate(sendMessageSchema), async (req: A
   }
 });
 
-// Delete message
-router.delete('/:messageId', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
+// Clear all messages in a chat
+router.delete('/chat/:chatId/clear', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const chatId = req.params.chatId;
+
+    const { ChatModel } = await import('../models/chat.model');
+    const isInChat = await ChatModel.isUserInChat(chatId, userId);
+    if (!isInChat) {
+      res.status(403).json({ error: 'Not authorized for this chat' });
+      return;
+    }
+
+    const success = await MessageModel.clearChat(chatId);
+    if (!success) {
+      res.status(500).json({ error: 'Failed to clear chat' });
+      return;
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to clear chat' });
+  }
+});
+
+// Unsend message (removes for everyone, sender only)
+router.delete('/:messageId/unsend', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const messageId = req.params.messageId;
 
-    const success = await MessageModel.deleteMessage(messageId, userId);
+    const result = await MessageModel.unsendMessage(messageId, userId);
+    if (!result) {
+      res.status(400).json({ error: 'Failed to unsend message (only sender can unsend)' });
+      return;
+    }
 
+    // Broadcast to chat room so other user sees the unsend in real-time
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat:${result.chatId}`).emit('message:unsend', { messageId, chatId: result.chatId });
+    }
+
+    res.json({ success: true, chatId: result.chatId });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to unsend message' });
+  }
+});
+
+// Delete message for me only (hides from my view)
+router.delete('/:messageId/delete-for-me', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const messageId = req.params.messageId;
+
+    const success = await MessageModel.deleteForMe(messageId, userId);
     if (!success) {
       res.status(400).json({ error: 'Failed to delete message' });
       return;

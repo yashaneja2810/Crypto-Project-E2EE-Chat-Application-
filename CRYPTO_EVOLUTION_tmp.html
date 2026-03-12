@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CRYPTO_EVOLUTION.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="cryptography-evolution--from-rsa-to-x25519">Cryptography Evolution — From RSA to X25519</h1>
+<p>A simple guide to every algorithm change we made, why we made it, and how our security compares to WhatsApp.</p>
+<hr>
+<h2 id="1-key-exchange-rsa-%E2%86%92-ecdh-p-256-%E2%86%92-x25519">1. Key Exchange: RSA → ECDH P-256 → X25519</h2>
+<h3 id="what-it-does">What it does</h3>
+<p>When two users want to chat, they need a shared secret key. Key exchange lets them agree on one without ever sending it over the network.</p>
+<h3 id="the-journey">The journey</h3>
+<table>
+<thead>
+<tr>
+<th>Version</th>
+<th>Algorithm</th>
+<th>How it worked</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v1</td>
+<td>RSA-OAEP 2048</td>
+<td>Sender encrypts a random chat key with recipient's RSA public key. Recipient decrypts with private key.</td>
+</tr>
+<tr>
+<td>v2</td>
+<td>ECDH P-256</td>
+<td>Both sides do a Diffie-Hellman exchange on the P-256 curve. Shared secret is derived, no key is ever transmitted.</td>
+</tr>
+<tr>
+<td>v3 (now)</td>
+<td>X25519</td>
+<td>Same idea as ECDH, but on Curve25519 instead of P-256.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="why-each-change">Why each change?</h3>
+<p><strong>RSA → ECDH P-256:</strong></p>
+<ul>
+<li>RSA key exchange means the sender <em>chooses</em> the chat key and encrypts it. If the sender's system is compromised, the key is known.</li>
+<li>ECDH means <em>both</em> parties contribute randomness — neither side alone decides the key.</li>
+<li>ECDH keys are 32 bytes vs RSA's 256 bytes — much smaller, faster.</li>
+</ul>
+<p><strong>ECDH P-256 → X25519:</strong></p>
+<ul>
+<li>P-256 was designed by NIST. NIST has had trust issues (they standardised a backdoored random number generator called Dual_EC_DRBG).</li>
+<li>X25519 was designed by Daniel Bernstein, independently reviewed, and is simpler to implement safely.</li>
+<li>P-256 requires careful implementation to avoid timing attacks. X25519 is constant-time by design — every operation takes the same time regardless of the key, so attackers can't learn anything by measuring how long things take.</li>
+<li>X25519 is ~40% faster than P-256.</li>
+</ul>
+<hr>
+<h2 id="2-signatures-none-%E2%86%92-ed25519">2. Signatures: None → Ed25519</h2>
+<h3 id="what-it-does">What it does</h3>
+<p>Signatures prove that a message was actually sent by the person who claims to have sent it. Without signatures, the server (or an attacker) could modify or forge messages.</p>
+<h3 id="before">Before</h3>
+<p>No signatures at all. The server could theoretically alter message content in transit and neither party would know.</p>
+<h3 id="now-ed25519">Now (Ed25519)</h3>
+<ul>
+<li>Every user gets a long-term Ed25519 signing key at signup.</li>
+<li>Every message is signed before encryption.</li>
+<li>The recipient verifies the signature after decryption.</li>
+<li>A green ✓ appears if verification passes, orange ! if it fails.</li>
+</ul>
+<h3 id="why-ed25519">Why Ed25519?</h3>
+<ul>
+<li>It's built on the same Curve25519 family as X25519, so one well-audited curve handles both jobs.</li>
+<li>Signatures are only 64 bytes (RSA signatures would be 256 bytes).</li>
+<li>Signing and verification are extremely fast.</li>
+<li>No known practical attacks exist against it.</li>
+</ul>
+<hr>
+<h2 id="3-password-kdf-pbkdf2-%E2%86%92-argon2id">3. Password KDF: PBKDF2 → Argon2id</h2>
+<h3 id="what-it-does">What it does</h3>
+<p>Your password is used to encrypt your master key. A Key Derivation Function (KDF) makes it expensive to guess passwords by brute force.</p>
+<h3 id="before-pbkdf2">Before (PBKDF2)</h3>
+<p>PBKDF2 runs SHA-256 many times in a loop. It's slow on a CPU, but GPUs can run thousands of SHA-256 hashes in parallel. An attacker with a $5,000 GPU rig can try billions of passwords per day.</p>
+<h3 id="now-argon2id">Now (Argon2id)</h3>
+<p>Argon2id requires <strong>64 MB of RAM per guess</strong>. GPUs have fast cores but limited per-core memory. This makes GPU/ASIC attacks roughly 1,000x more expensive.</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>PBKDF2</th>
+<th>Argon2id</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Memory needed per guess</td>
+<td>~0</td>
+<td>64 MB</td>
+</tr>
+<tr>
+<td>GPU-friendly?</td>
+<td>Yes (bad for us)</td>
+<td>No (good for us)</td>
+</tr>
+<tr>
+<td>Standardised?</td>
+<td>NIST SP 800-132</td>
+<td>RFC 9106, won Password Hashing Competition (2015)</td>
+</tr>
+<tr>
+<td>Side-channel resistance</td>
+<td>Basic</td>
+<td>Argon2id combines Argon2i (side-channel safe) + Argon2d (GPU-hard)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Our parameters:</strong> 64 MiB memory, 3 iterations, parallelism 1, 32-byte output.</p>
+<hr>
+<h2 id="4-forward-secrecy-none-%E2%86%92-x3dh-style-prekeys">4. Forward Secrecy: None → X3DH-style Prekeys</h2>
+<h3 id="what-it-does">What it does</h3>
+<p>Forward secrecy means: even if your long-term private key is stolen <em>tomorrow</em>, messages sent <em>today</em> cannot be decrypted.</p>
+<h3 id="before">Before</h3>
+<p>Every chat used a key derived from both users' long-term static keys. If either long-term key was ever compromised, <strong>all past and future messages</strong> in that chat could be decrypted.</p>
+<h3 id="now-ephemeral-prekeys">Now (Ephemeral Prekeys)</h3>
+<ul>
+<li>At signup, each user generates 10 one-time X25519 prekeys.</li>
+<li>When Alice starts a chat with Bob, she fetches one of Bob's prekeys from the server.</li>
+<li>Alice generates a fresh ephemeral key and combines it with Bob's prekey to derive a unique session key.</li>
+<li>Bob's prekey is deleted from the server after use — it can never be reused.</li>
+<li>Even if Alice's or Bob's long-term key leaks later, this session key cannot be reconstructed.</li>
+</ul>
+<p>This is modelled on Signal's X3DH (Extended Triple Diffie-Hellman) protocol.</p>
+<hr>
+<h2 id="5-device-trust-none-%E2%86%92-device-identity-keys">5. Device Trust: None → Device Identity Keys</h2>
+<h3 id="what-it-does">What it does</h3>
+<p>Prevents a man-in-the-middle (MITM) attack where the server substitutes a fake public key when you upload yours.</p>
+<h3 id="before">Before</h3>
+<p>When you uploaded your public key, there was no proof it really came from your device. A compromised server could swap in its own key and read all your messages.</p>
+<h3 id="now">Now</h3>
+<ul>
+<li>Each device generates its own Ed25519 identity key (stored locally).</li>
+<li>When uploading your X25519 public key, the device signs it with its device key.</li>
+<li>Other devices (or future audit tools) can verify the signature to confirm the key wasn't tampered with.</li>
+</ul>
+<h3 id="important-this-is-not-multi-device-support">Important: This is NOT multi-device support</h3>
+<p>Currently we store only <strong>one</strong> device key per user. If you log in from a second device, it overwrites the first. True multi-device would need a per-device table, per-device encryption, and a device linking protocol. The device key today exists purely to <strong>prove key authenticity</strong> — not to manage multiple devices.</p>
+<hr>
+<h2 id="6-what-stayed-the-same">6. What Stayed the Same</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Algorithm</th>
+<th>Why kept</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Symmetric encryption</td>
+<td>AES-256-GCM</td>
+<td>Gold standard. 256-bit key, authenticated encryption (detects tampering). No reason to change.</td>
+</tr>
+<tr>
+<td>Key derivation (shared secret → chat key)</td>
+<td>HKDF-SHA-256</td>
+<td>Industry standard (RFC 5869). Used by Signal, TLS 1.3, and WhatsApp.</td>
+</tr>
+<tr>
+<td>IV generation</td>
+<td>96-bit random per message</td>
+<td>Standard for AES-GCM. Random IV ensures no two messages produce the same ciphertext.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="security-comparison-us-vs-whatsapp">Security Comparison: Us vs WhatsApp</h2>
+<p>WhatsApp uses the Signal Protocol (designed by Open Whisper Systems). Here's how we compare:</p>
+<h3 id="where-we-match-whatsapp">Where we match WhatsApp</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>WhatsApp</th>
+<th>Us</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>End-to-end encryption</td>
+<td>✅ AES-256-GCM</td>
+<td>✅ AES-256-GCM</td>
+</tr>
+<tr>
+<td>Key agreement</td>
+<td>✅ X25519</td>
+<td>✅ X25519</td>
+</tr>
+<tr>
+<td>Key derivation</td>
+<td>✅ HKDF-SHA-256</td>
+<td>✅ HKDF-SHA-256</td>
+</tr>
+<tr>
+<td>Message signatures</td>
+<td>✅ Ed25519</td>
+<td>✅ Ed25519</td>
+</tr>
+<tr>
+<td>Forward secrecy (prekeys)</td>
+<td>✅ X3DH</td>
+<td>✅ X3DH-style</td>
+</tr>
+<tr>
+<td>Zero-knowledge server</td>
+<td>✅ Server can't read messages</td>
+<td>✅ Server can't read messages</td>
+</tr>
+<tr>
+<td>Password hashing</td>
+<td>✅ (handled by device OS)</td>
+<td>✅ Argon2id</td>
+</tr>
+</tbody>
+</table>
+<h3 id="where-we-are-better-than-whatsapp">Where we are BETTER than WhatsApp</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>WhatsApp</th>
+<th>Us</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Open source</td>
+<td>❌ Closed source (server + client)</td>
+<td>✅ Fully open source — anyone can audit</td>
+</tr>
+<tr>
+<td>Device identity binding</td>
+<td>❌ Key uploads are not device-signed</td>
+<td>✅ Each device signs key uploads with its own Ed25519 key</td>
+</tr>
+<tr>
+<td>Password protection</td>
+<td>Relies on phone OS keychain</td>
+<td>Argon2id (memory-hard, GPU-resistant) protects master key</td>
+</tr>
+<tr>
+<td>Metadata visibility</td>
+<td>❌ WhatsApp sees who talks to whom, when, and how often</td>
+<td>Our server sees less metadata (no phone numbers, no contact graph sync)</td>
+</tr>
+<tr>
+<td>Trust model</td>
+<td>Trust Meta (Facebook) won't peek</td>
+<td>Trust is unnecessary — code is auditable, server is zero-knowledge</td>
+</tr>
+</tbody>
+</table>
+<h3 id="where-whatsapp-is-better-than-us">Where WhatsApp is BETTER than us</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>WhatsApp</th>
+<th>Us</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Double Ratchet</td>
+<td>✅ Every single message uses a new key (break-in recovery + per-message forward secrecy)</td>
+<td>❌ We use one session key per chat session, not per message</td>
+</tr>
+<tr>
+<td>Key verification UX</td>
+<td>✅ QR code / safety number comparison between devices</td>
+<td>❌ No user-facing verification mechanism yet</td>
+</tr>
+<tr>
+<td>Sealed sender</td>
+<td>✅ Server doesn't know who sent a message (metadata hiding)</td>
+<td>❌ Server sees sender ID on each message</td>
+</tr>
+<tr>
+<td>Multi-device sync</td>
+<td>✅ Seamless multi-device with per-device encryption</td>
+<td>⚠️ Basic device identity keys exist, but no multi-device key sync yet</td>
+</tr>
+<tr>
+<td>Backup encryption</td>
+<td>✅ Encrypted cloud backups with user password</td>
+<td>⚠️ Recovery key exists but no encrypted cloud backup</td>
+</tr>
+<tr>
+<td>Scale &amp; audit</td>
+<td>Battle-tested by 2+ billion users, audited by multiple firms</td>
+<td>New codebase, not yet independently audited</td>
+</tr>
+<tr>
+<td>Disappearing messages</td>
+<td>✅ Built-in message expiry</td>
+<td>❌ Not implemented</td>
+</tr>
+</tbody>
+</table>
+<h3 id="summary">Summary</h3>
+<p>Our app uses the <strong>same core cryptographic primitives</strong> as WhatsApp (X25519, Ed25519, AES-256-GCM, HKDF). The biggest gap is the <strong>Double Ratchet</strong> — WhatsApp generates a new encryption key for every single message, so compromising one message key reveals nothing about any other message. We derive one key per chat session, which is good but not as strong.</p>
+<p>The biggest advantage we have is <strong>full transparency</strong> — the code is open source, the server is zero-knowledge, and users don't have to trust a corporation to not peek at their data.</p>
+<hr>
+<p><em>Last updated: March 2026 — feature/crypto-upgrade-v2 branch</em></p>
+
+</body>
+</html>

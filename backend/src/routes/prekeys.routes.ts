@@ -53,6 +53,22 @@ router.post('/', verifySupabaseToken, async (req: AuthRequest, res: Response) =>
  * Used by the initiating party to set up a forward-secret session.
  * Requires authentication (must be logged in) but any user can fetch another's prekey.
  */
+/**
+ * GET /api/prekeys/count/me
+ * Returns the authenticated user's remaining prekey count.
+ * Used by the client to decide whether to replenish.
+ */
+router.get('/count/me', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const remaining = await PrekeysModel.getPrekeyCount(userId);
+    res.json({ remaining });
+  } catch (err) {
+    logger.error('Error getting prekey count:', err);
+    res.status(500).json({ error: 'Failed to get prekey count' });
+  }
+});
+
 router.get('/:userId', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
