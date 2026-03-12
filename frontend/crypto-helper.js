@@ -14,6 +14,10 @@ const ARGON2_TIME = 3;      // 3 iterations
 const ARGON2_PARA = 1;
 const ARGON2_LEN  = 32;     // 32-byte output → AES-256 key material
 
+// Capture native Web Crypto before any library can shadow it
+const _crypto = window.crypto;
+const _subtle = _crypto.subtle;
+
 class CryptoHelper {
     constructor() {
         // X25519 long-term identity keys (key agreement)
@@ -79,7 +83,7 @@ class CryptoHelper {
 
     async generateUserKeys() {
         console.log('🔐 Generating X25519 identity keypair...');
-        const kp = await crypto.subtle.generateKey(
+        const kp = await _subtle.generateKey(
             { name: 'X25519' },
             true,
             ['deriveBits']
@@ -92,20 +96,20 @@ class CryptoHelper {
 
     async exportPublicKey() {
         // Export as raw 32-byte X25519 point, base64-encoded
-        const raw = await crypto.subtle.exportKey('raw', this.publicKey);
+        const raw = await _subtle.exportKey('raw', this.publicKey);
         return btoa(String.fromCharCode(...new Uint8Array(raw)));
     }
 
     async importPublicKey(base64) {
         const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        return crypto.subtle.importKey('raw', raw, { name: 'X25519' }, true, []);
+        return _subtle.importKey('raw', raw, { name: 'X25519' }, true, []);
     }
 
     // ============ ED25519 IDENTITY KEYS (signatures) ============
 
     async generateSigningKeys() {
         console.log('✍️ Generating Ed25519 signing keypair...');
-        const kp = await crypto.subtle.generateKey(
+        const kp = await _subtle.generateKey(
             { name: 'Ed25519' },
             true,
             ['sign', 'verify']
@@ -117,13 +121,13 @@ class CryptoHelper {
     }
 
     async exportSigningPublicKey() {
-        const raw = await crypto.subtle.exportKey('raw', this.verifyKey);
+        const raw = await _subtle.exportKey('raw', this.verifyKey);
         return btoa(String.fromCharCode(...new Uint8Array(raw)));
     }
 
     async importSigningPublicKey(base64) {
         const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        return crypto.subtle.importKey('raw', raw, { name: 'Ed25519' }, true, ['verify']);
+        return _subtle.importKey('raw', raw, { name: 'Ed25519' }, true, ['verify']);
     }
 
     // Sign arbitrary bytes/string; returns base64 signature
@@ -131,7 +135,7 @@ class CryptoHelper {
         const signingKey = key || this.signingKey;
         if (!signingKey) throw new Error('No signing key loaded');
         const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-        const sig = await crypto.subtle.sign({ name: 'Ed25519' }, signingKey, bytes);
+        const sig = await _subtle.sign({ name: 'Ed25519' }, signingKey, bytes);
         return btoa(String.fromCharCode(...new Uint8Array(sig)));
     }
 
@@ -140,7 +144,7 @@ class CryptoHelper {
         try {
             const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
             const sig   = Uint8Array.from(atob(signatureBase64), c => c.charCodeAt(0));
-            return await crypto.subtle.verify({ name: 'Ed25519' }, verifyKey, sig, bytes);
+            return await _subtle.verify({ name: 'Ed25519' }, verifyKey, sig, bytes);
         } catch {
             return false;
         }
@@ -148,9 +152,9 @@ class CryptoHelper {
 
     // Encrypt Ed25519 signing private key with master key
     async encryptSigningKey(signingKey, masterKey) {
-        const pkcs8 = await crypto.subtle.exportKey('pkcs8', signingKey);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
+        const pkcs8 = await _subtle.exportKey('pkcs8', signingKey);
+        const iv = _crypto.getRandomValues(new Uint8Array(12));
+        const enc = await _subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
         return {
             encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
             iv: btoa(String.fromCharCode(...new Uint8Array(iv)))
@@ -161,8 +165,8 @@ class CryptoHelper {
     async decryptSigningKey(encryptedData, masterKey) {
         const iv  = Uint8Array.from(atob(encryptedData.iv),        c => c.charCodeAt(0));
         const enc = Uint8Array.from(atob(encryptedData.encrypted), c => c.charCodeAt(0));
-        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, masterKey, enc);
-        return crypto.subtle.importKey('pkcs8', dec, { name: 'Ed25519' }, true, ['sign']);
+        const dec = await _subtle.decrypt({ name: 'AES-GCM', iv }, masterKey, enc);
+        return _subtle.importKey('pkcs8', dec, { name: 'Ed25519' }, true, ['sign']);
     }
 
     // ============ X25519 KEY AGREEMENT (session key derivation) ============
@@ -170,7 +174,7 @@ class CryptoHelper {
     // Derive per-chat AES-256-GCM key from static identity keys (existing sessions)
     async deriveChatKey(recipientPublicKey, chatId) {
         console.log(`🔑 Deriving X25519 chat key for chat ${chatId}...`);
-        const sharedBits = await crypto.subtle.deriveBits(
+        const sharedBits = await _subtle.deriveBits(
             { name: 'X25519', public: recipientPublicKey },
             this.privateKey,
             256
@@ -182,7 +186,7 @@ class CryptoHelper {
     // Forward secret: ephemeral private is discarded after this call
     async deriveSessionKeyAsInitiator(myEphPrivate, recipientPrekeyPublic, chatId) {
         console.log(`🔑 Deriving forward-secret session key (initiator) for chat ${chatId}...`);
-        const sharedBits = await crypto.subtle.deriveBits(
+        const sharedBits = await _subtle.deriveBits(
             { name: 'X25519', public: recipientPrekeyPublic },
             myEphPrivate,
             256
@@ -193,7 +197,7 @@ class CryptoHelper {
     // Derive session key AS RESPONDER: own prekey private + initiator's ephemeral public
     async deriveSessionKeyAsResponder(myPrekeyPrivate, initiatorEphPublic, chatId) {
         console.log(`🔑 Deriving forward-secret session key (responder) for chat ${chatId}...`);
-        const sharedBits = await crypto.subtle.deriveBits(
+        const sharedBits = await _subtle.deriveBits(
             { name: 'X25519', public: initiatorEphPublic },
             myPrekeyPrivate,
             256
@@ -203,8 +207,8 @@ class CryptoHelper {
 
     // Internal: HKDF(sharedBits, salt=chatId, info) → AES-256-GCM; cached in memory + localStorage
     async _hkdfToChatKey(sharedBits, chatId, info) {
-        const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
-        const chatKey = await crypto.subtle.deriveKey(
+        const hkdfKey = await _subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+        const chatKey = await _subtle.deriveKey(
             {
                 name: 'HKDF',
                 hash: 'SHA-256',
@@ -217,7 +221,7 @@ class CryptoHelper {
             ['encrypt', 'decrypt']
         );
         this.chatKeys.set(chatId, chatKey);
-        const raw = await crypto.subtle.exportKey('raw', chatKey);
+        const raw = await _subtle.exportKey('raw', chatKey);
         localStorage.setItem(`chatKey_${chatId}`,
             btoa(String.fromCharCode(...new Uint8Array(raw))));
         return chatKey;
@@ -228,7 +232,7 @@ class CryptoHelper {
         const stored = localStorage.getItem(`chatKey_${chatId}`);
         if (!stored) return null;
         const raw = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
-        const chatKey = await crypto.subtle.importKey(
+        const chatKey = await _subtle.importKey(
             'raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']
         );
         this.chatKeys.set(chatId, chatKey);
@@ -242,9 +246,9 @@ class CryptoHelper {
         if (!this.signingKey) throw new Error('Signing key not loaded — cannot sign prekeys');
         const prekeys = [];
         for (let i = 0; i < count; i++) {
-            const kp = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
-            const pubRaw    = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-            const privPkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+            const kp = await _subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
+            const pubRaw    = new Uint8Array(await _subtle.exportKey('raw', kp.publicKey));
+            const privPkcs8 = new Uint8Array(await _subtle.exportKey('pkcs8', kp.privateKey));
             const pubBase64 = btoa(String.fromCharCode(...pubRaw));
             // Sign the prekey public key with user's Ed25519 identity key
             const signature = await this.signData(pubRaw);
@@ -264,8 +268,8 @@ class CryptoHelper {
             signature:   p.signature,
             priv_bytes:  p._privateBytes,
         })));
-        const iv  = crypto.getRandomValues(new Uint8Array(12));
-        const enc = await crypto.subtle.encrypt(
+        const iv  = _crypto.getRandomValues(new Uint8Array(12));
+        const enc = await _subtle.encrypt(
             { name: 'AES-GCM', iv }, masterKey, new TextEncoder().encode(payload)
         );
         await this._idbSet('prekeyBundle', JSON.stringify({
@@ -280,7 +284,7 @@ class CryptoHelper {
         const { encrypted, iv } = JSON.parse(stored);
         const encBytes = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
         const ivBytes  = Uint8Array.from(atob(iv),        c => c.charCodeAt(0));
-        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, masterKey, encBytes);
+        const dec = await _subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, masterKey, encBytes);
         return JSON.parse(new TextDecoder().decode(dec));
     }
 
@@ -293,7 +297,7 @@ class CryptoHelper {
         const prekey = bundle.splice(idx, 1)[0];
         await this.storePrekeyBundle(bundle, masterKey); // save bundle without consumed key
         const privBytes = new Uint8Array(prekey.priv_bytes);
-        return crypto.subtle.importKey('pkcs8', privBytes, { name: 'X25519' }, false, ['deriveBits']);
+        return _subtle.importKey('pkcs8', privBytes, { name: 'X25519' }, false, ['deriveBits']);
     }
 
     // Return only the server-safe portion of prekeys (public key + signature, no private)
@@ -305,7 +309,7 @@ class CryptoHelper {
 
     async generateDeviceIdentityKey() {
         console.log('📱 Generating device Ed25519 identity keypair...');
-        const kp = await crypto.subtle.generateKey(
+        const kp = await _subtle.generateKey(
             { name: 'Ed25519' }, true, ['sign', 'verify']
         );
         this.deviceSigningKey = kp.privateKey;
@@ -314,15 +318,15 @@ class CryptoHelper {
     }
 
     async exportDevicePublicKey() {
-        const raw = await crypto.subtle.exportKey('raw', this.deviceVerifyKey);
+        const raw = await _subtle.exportKey('raw', this.deviceVerifyKey);
         return btoa(String.fromCharCode(...new Uint8Array(raw)));
     }
 
     // Store device identity key encrypted with master key
     async storeDeviceIdentityKey(masterKey) {
-        const pkcs8 = await crypto.subtle.exportKey('pkcs8', this.deviceSigningKey);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
+        const pkcs8 = await _subtle.exportKey('pkcs8', this.deviceSigningKey);
+        const iv = _crypto.getRandomValues(new Uint8Array(12));
+        const enc = await _subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
         await this._idbSet('deviceIdentityKey', JSON.stringify({
             encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
             iv:        btoa(String.fromCharCode(...new Uint8Array(iv))),
@@ -336,12 +340,12 @@ class CryptoHelper {
         const { encrypted, iv, pub } = JSON.parse(stored);
         const enc     = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
         const ivBytes = Uint8Array.from(atob(iv),        c => c.charCodeAt(0));
-        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, masterKey, enc);
-        this.deviceSigningKey = await crypto.subtle.importKey(
+        const dec = await _subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, masterKey, enc);
+        this.deviceSigningKey = await _subtle.importKey(
             'pkcs8', dec, { name: 'Ed25519' }, true, ['sign']
         );
         const pubRaw = Uint8Array.from(atob(pub), c => c.charCodeAt(0));
-        this.deviceVerifyKey = await crypto.subtle.importKey(
+        this.deviceVerifyKey = await _subtle.importKey(
             'raw', pubRaw, { name: 'Ed25519' }, true, ['verify']
         );
         return true;
@@ -359,8 +363,8 @@ class CryptoHelper {
     async encryptMessage(message, chatId) {
         const chatKey = await this.loadChatKey(chatId);
         if (!chatKey) throw new Error('No chat key for this conversation');
-        const iv  = crypto.getRandomValues(new Uint8Array(12)); // 96-bit random IV per message
-        const enc = await crypto.subtle.encrypt(
+        const iv  = _crypto.getRandomValues(new Uint8Array(12)); // 96-bit random IV per message
+        const enc = await _subtle.encrypt(
             { name: 'AES-GCM', iv },
             chatKey,
             new TextEncoder().encode(message)
@@ -376,7 +380,7 @@ class CryptoHelper {
         if (!chatKey) throw new Error('No chat key for this conversation');
         const enc = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
         const iv  = Uint8Array.from(atob(ivBase64),        c => c.charCodeAt(0));
-        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, chatKey, enc);
+        const dec = await _subtle.decrypt({ name: 'AES-GCM', iv }, chatKey, enc);
         return new TextDecoder().decode(dec);
     }
 
@@ -394,9 +398,9 @@ class CryptoHelper {
     // ============ PRIVATE KEY ENCRYPTION (AES-GCM with master key) ============
 
     async encryptPrivateKey(privateKey, masterKey) {
-        const pkcs8 = await crypto.subtle.exportKey('pkcs8', privateKey);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
+        const pkcs8 = await _subtle.exportKey('pkcs8', privateKey);
+        const iv = _crypto.getRandomValues(new Uint8Array(12));
+        const enc = await _subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
         return {
             encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
             iv:        btoa(String.fromCharCode(...new Uint8Array(iv)))
@@ -406,30 +410,30 @@ class CryptoHelper {
     async decryptPrivateKey(encryptedData, masterKey) {
         const iv  = Uint8Array.from(atob(encryptedData.iv),        c => c.charCodeAt(0));
         const enc = Uint8Array.from(atob(encryptedData.encrypted), c => c.charCodeAt(0));
-        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, masterKey, enc);
-        return crypto.subtle.importKey('pkcs8', dec, { name: 'X25519' }, true, ['deriveBits']);
+        const dec = await _subtle.decrypt({ name: 'AES-GCM', iv }, masterKey, enc);
+        return _subtle.importKey('pkcs8', dec, { name: 'X25519' }, true, ['deriveBits']);
     }
 
     // ============ MASTER KEY — Argon2id path ============
 
     async generateMasterKey() {
-        return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+        return _subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
     }
 
     // Encrypt master key using Argon2id-derived wrapping key (random salt stored alongside)
     async encryptMasterKeyWithPassword(masterKey, password) {
         if (typeof argon2 === 'undefined') throw new Error('argon2-browser library not loaded');
-        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const salt = _crypto.getRandomValues(new Uint8Array(16));
         const result = await argon2.hash({
             pass: password, salt,
             type: argon2.ArgonType.Argon2id,
             mem: ARGON2_MEM, time: ARGON2_TIME, parallelism: ARGON2_PARA, hashLen: ARGON2_LEN,
         });
-        const wrappingKey = await crypto.subtle.importKey(
+        const wrappingKey = await _subtle.importKey(
             'raw', result.hash, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']
         );
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const wrapped = await crypto.subtle.wrapKey('raw', masterKey, wrappingKey, { name: 'AES-GCM', iv });
+        const iv = _crypto.getRandomValues(new Uint8Array(12));
+        const wrapped = await _subtle.wrapKey('raw', masterKey, wrappingKey, { name: 'AES-GCM', iv });
         return {
             wrapped: btoa(String.fromCharCode(...new Uint8Array(wrapped))),
             iv:      btoa(String.fromCharCode(...new Uint8Array(iv))),
@@ -449,10 +453,10 @@ class CryptoHelper {
             type: argon2.ArgonType.Argon2id,
             mem: ARGON2_MEM, time: ARGON2_TIME, parallelism: ARGON2_PARA, hashLen: ARGON2_LEN,
         });
-        const wrappingKey = await crypto.subtle.importKey(
+        const wrappingKey = await _subtle.importKey(
             'raw', result.hash, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']
         );
-        return crypto.subtle.unwrapKey(
+        return _subtle.unwrapKey(
             'raw', wrapped, wrappingKey,
             { name: 'AES-GCM', iv },
             { name: 'AES-GCM', length: 256 },
@@ -463,7 +467,7 @@ class CryptoHelper {
     // Argon2id-derived auth password for Supabase (deterministic: fixed salt from email)
     async deriveAuthPassword(password, email) {
         if (typeof argon2 === 'undefined') throw new Error('argon2-browser library not loaded');
-        const saltHash = await crypto.subtle.digest(
+        const saltHash = await _subtle.digest(
             'SHA-256', new TextEncoder().encode(email.toLowerCase() + ':auth-salt-v2')
         );
         const result = await argon2.hash({
@@ -478,7 +482,7 @@ class CryptoHelper {
     // ============ MASTER KEY STORAGE ============
 
     async storeMasterKeyInIndexedDB(masterKey) {
-        const raw = await crypto.subtle.exportKey('raw', masterKey);
+        const raw = await _subtle.exportKey('raw', masterKey);
         await this._idbSet('masterKey', btoa(String.fromCharCode(...new Uint8Array(raw))));
         console.log('✅ Master key stored in IndexedDB');
     }
@@ -488,7 +492,7 @@ class CryptoHelper {
             const stored = await this._idbGet('masterKey');
             if (!stored) return null;
             const raw = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
-            return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+            return _subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
         } catch {
             return null;
         }
@@ -504,8 +508,8 @@ class CryptoHelper {
     // ============ RECOVERY KEY ============
 
     async generateRecoveryKey(masterKey) {
-        const raw  = await crypto.subtle.exportKey('raw', masterKey);
-        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const raw  = await _subtle.exportKey('raw', masterKey);
+        const salt = _crypto.getRandomValues(new Uint8Array(16));
         const combined = new Uint8Array(48);
         combined.set(new Uint8Array(raw), 0);
         combined.set(salt, 32);
@@ -514,7 +518,7 @@ class CryptoHelper {
 
     async restoreMasterKeyFromRecovery(recoveryKey) {
         const combined = Uint8Array.from(atob(recoveryKey.replace(/-/g, '')), c => c.charCodeAt(0));
-        return crypto.subtle.importKey(
+        return _subtle.importKey(
             'raw', combined.slice(0, 32), { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
         );
     }
