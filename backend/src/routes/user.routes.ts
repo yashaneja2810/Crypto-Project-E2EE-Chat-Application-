@@ -127,19 +127,19 @@ router.post('/public-key', verifySupabaseToken, validate(publicKeySchema), async
   }
 });
 
-// Get user's public key (anyone can access - public keys are meant to be shared!)
+// Get user's public key bundle (anyone can access - public keys are meant to be shared!)
 router.get('/:userId/public-key', verifySupabaseToken, async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
 
-    const publicKey = await KeysModel.getPublicKey(userId);
+    const bundle = await KeysModel.getPublicKeyBundle(userId);
 
-    if (!publicKey) {
+    if (!bundle) {
       res.status(404).json({ error: 'Public key not found' });
       return;
     }
 
-    res.json({ public_key: publicKey });
+    res.json(bundle);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch public key' });
   }

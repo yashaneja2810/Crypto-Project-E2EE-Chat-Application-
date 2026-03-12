@@ -24,18 +24,27 @@ CREATE TABLE user_profiles (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- User Keys Table (master key + RSA keys)
+-- User Keys Table (master key + asymmetric keys)
 CREATE TABLE user_keys (
     user_id UUID PRIMARY KEY REFERENCES user_profiles(id) ON DELETE CASCADE,
-    encrypted_master_key TEXT, -- Master key encrypted with password (server cannot decrypt)
-    encrypted_rsa_private_key TEXT, -- RSA private key encrypted with master key
-    public_key TEXT NOT NULL, -- Base64 encoded RSA public key
+    encrypted_master_key TEXT,          -- Master key encrypted with Argon2id-derived key
+    encrypted_rsa_private_key TEXT,     -- X25519 private key encrypted with master key (column name kept for DB compat)
+    public_key TEXT NOT NULL,           -- X25519 public key (base64 raw 32 bytes)
+    signing_public_key TEXT,            -- Ed25519 identity signing public key (base64 raw)
+    device_public_key TEXT,             -- Ed25519 device identity public key (base64 raw)
+    device_key_signature TEXT,          -- Signature of x25519 public_key by device_public_key
+    encrypted_signing_key TEXT,         -- Ed25519 signing private key encrypted with master key
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON COLUMN user_keys.encrypted_master_key IS 'Master encryption key encrypted with password-derived key. Server cannot decrypt this.';
-COMMENT ON COLUMN user_keys.encrypted_rsa_private_key IS 'RSA private key encrypted with master key for double encryption.';
+COMMENT ON COLUMN user_keys.encrypted_master_key IS 'Master encryption key encrypted with Argon2id-derived key. Server cannot decrypt this.';
+COMMENT ON COLUMN user_keys.encrypted_rsa_private_key IS 'X25519 private key encrypted with master key (column name kept for backward compat).';
+COMMENT ON COLUMN user_keys.public_key IS 'X25519 static public key used for key agreement (base64-encoded raw 32 bytes).';
+COMMENT ON COLUMN user_keys.signing_public_key IS 'Ed25519 public key used to verify message signatures.';
+COMMENT ON COLUMN user_keys.device_public_key IS 'Ed25519 device identity key — proves which device uploaded these keys.';
+COMMENT ON COLUMN user_keys.device_key_signature IS 'Signature of public_key by device_public_key — binds device identity to user key.';
+COMMENT ON COLUMN user_keys.encrypted_signing_key IS 'Ed25519 signing private key encrypted with master key.';;
 
 -- Friends/Relationships Table
 CREATE TABLE friends (
@@ -136,8 +145,20 @@ CREATE TABLE anonymous_chats (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Prekeys Table (X3DH-style ephemeral prekeys for forward secrecy)
+-- Public halves of one-time X25519 prekeys, each signed with the user's Ed25519 signing key.
+-- Consumed (deleted) upon first use so each prekey is used at most once.
+CREATE TABLE prekeys (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    public_key TEXT NOT NULL,   -- X25519 prekey public key (base64 raw 32 bytes)
+    signature TEXT NOT NULL,    -- Ed25519 signature of public_key by user's signing_public_key
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX idx_user_keys_user_id ON user_keys(user_id);
+CREATE INDEX idx_prekeys_user_id ON prekeys(user_id);
 CREATE INDEX idx_chat_keys_chat_id ON chat_keys(chat_id);
 CREATE INDEX idx_chat_keys_recipient_id ON chat_keys(recipient_id);
 
@@ -170,6 +191,7 @@ ALTER TABLE groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE device_verifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE anonymous_chats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prekeys ENABLE ROW LEVEL SECURITY;
 
 -- User Profiles Policies
 CREATE POLICY "Users can view all profiles" ON user_profiles
@@ -190,6 +212,19 @@ CREATE POLICY "Users can insert own public key" ON user_keys
 
 CREATE POLICY "Users can update own public key" ON user_keys
     FOR UPDATE USING (auth.uid() = user_id);
+
+-- Prekeys Policies
+-- Anyone authenticated can read a prekey (needed to initiate forward-secret sessions)
+CREATE POLICY "Anyone can select one prekey" ON prekeys
+    FOR SELECT USING (true);
+
+-- Only the owner can upload their prekeys
+CREATE POLICY "Users can insert own prekeys" ON prekeys
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Only the owner (or the server via service role) can delete consumed prekeys
+CREATE POLICY "Users can delete own prekeys" ON prekeys
+    FOR DELETE USING (auth.uid() = user_id);
 
 -- Friends Policies
 CREATE POLICY "Users can view own friends" ON friends

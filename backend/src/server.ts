@@ -18,6 +18,7 @@ import groupRoutes from './routes/group.routes';
 import messageRoutes from './routes/message.routes';
 import deviceRoutes from './routes/device.routes';
 import { keysRouter } from './routes/keys.routes';
+import { prekeysRouter } from './routes/prekeys.routes';
 
 // Load environment variables
 dotenv.config();
@@ -77,6 +78,7 @@ app.use('/api/groups', groupRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/keys', keysRouter);
+app.use('/api/prekeys', prekeysRouter);
 
 // Setup WebSocket
 setupSocketIO(io);

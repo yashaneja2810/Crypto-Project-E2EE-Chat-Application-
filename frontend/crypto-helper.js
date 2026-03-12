@@ -1,17 +1,39 @@
-// Crypto Helper Functions for Zero-Knowledge Encryption
+// Crypto Helper — Zero-Knowledge E2EE
+// Encryption stack:
+//   Key Agreement : X25519 (Web Crypto Level 2)
+//   Signatures    : Ed25519
+//   Key Derivation: HKDF-SHA-256
+//   Password KDF  : Argon2id (argon2-browser WASM)
+//   Encryption    : AES-256-GCM  (96-bit random IV per message)
+// Forward secrecy: Ephemeral one-time prekeys (X3DH-style)
+// Device security: Per-device Ed25519 identity keys
+
+// Argon2id parameters (interactive login profile)
+const ARGON2_MEM  = 65536;  // 64 MiB
+const ARGON2_TIME = 3;      // 3 iterations
+const ARGON2_PARA = 1;
+const ARGON2_LEN  = 32;     // 32-byte output → AES-256 key material
 
 class CryptoHelper {
     constructor() {
+        // X25519 long-term identity keys (key agreement)
         this.privateKey = null;
-        this.publicKey = null;
-        this.chatKeys = new Map(); // chatId -> AES key
+        this.publicKey  = null;
+        // Ed25519 long-term identity keys (signing / authenticity)
+        this.signingKey = null;
+        this.verifyKey  = null;
+        // Per-device Ed25519 identity key (device onboarding MITM prevention)
+        this.deviceSigningKey       = null;
+        this.deviceVerifyKey        = null;
+        // AES-256-GCM per-chat session keys
+        this.chatKeys = new Map(); // chatId → CryptoKey
     }
 
     // ============ INDEXEDDB HELPERS ============
 
     _openDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open('EncryptionDB', 1);
+            const request = indexedDB.open('EncryptionDB', 2);
             request.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('keys')) {
@@ -49,474 +71,456 @@ class CryptoHelper {
             const tx = db.transaction(['keys'], 'readwrite');
             tx.objectStore('keys').delete(key);
             tx.oncomplete = () => { db.close(); resolve(); };
-            tx.onerror = () => { db.close(); resolve(); };
+            tx.onerror    = () => { db.close(); resolve(); };
         });
     }
 
-    /**
-     * Generate ECDH key pair for user (P-256)
-     */
+    // ============ X25519 IDENTITY KEYS (key agreement) ============
+
     async generateUserKeys() {
-        console.log('🔐 Generating ECDH key pair (P-256)...');
-
-        const keyPair = await crypto.subtle.generateKey(
-            {
-                name: 'ECDH',
-                namedCurve: 'P-256',
-            },
+        console.log('🔐 Generating X25519 identity keypair...');
+        const kp = await crypto.subtle.generateKey(
+            { name: 'X25519' },
             true,
-            ['deriveKey', 'deriveBits']
+            ['deriveBits']
         );
-
-        this.privateKey = keyPair.privateKey;
-        this.publicKey = keyPair.publicKey;
-
-        console.log('✅ ECDH key pair generated!');
-        console.log('🔒 Private key will be encrypted before upload (NEVER stored plaintext!)');
-
-        return keyPair;
+        this.privateKey = kp.privateKey;
+        this.publicKey  = kp.publicKey;
+        console.log('✅ X25519 keypair generated');
+        return kp;
     }
 
-    /**
-     * Load private key from localStorage
-     */
-    async loadPrivateKey() {
-        const stored = localStorage.getItem('privateKey');
-        if (!stored) return null;
-
-        const keyData = JSON.parse(stored);
-        this.privateKey = await crypto.subtle.importKey(
-            'jwk',
-            keyData,
-            {
-                name: 'ECDH',
-                namedCurve: 'P-256',
-            },
-            true,
-            ['deriveKey', 'deriveBits']
-        );
-
-        console.log('✅ Private key loaded from storage');
-        return this.privateKey;
-    }
-
-    /**
-     * Export public key as base64 string
-     */
     async exportPublicKey() {
-        const exported = await crypto.subtle.exportKey('jwk', this.publicKey);
-        return btoa(JSON.stringify(exported));
+        // Export as raw 32-byte X25519 point, base64-encoded
+        const raw = await crypto.subtle.exportKey('raw', this.publicKey);
+        return btoa(String.fromCharCode(...new Uint8Array(raw)));
     }
 
-    /**
-     * Import ECDH public key from base64 string
-     */
-    async importPublicKey(base64Key) {
-        const keyData = JSON.parse(atob(base64Key));
-        return await crypto.subtle.importKey(
-            'jwk',
-            keyData,
-            {
-                name: 'ECDH',
-                namedCurve: 'P-256',
-            },
+    async importPublicKey(base64) {
+        const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        return crypto.subtle.importKey('raw', raw, { name: 'X25519' }, true, []);
+    }
+
+    // ============ ED25519 IDENTITY KEYS (signatures) ============
+
+    async generateSigningKeys() {
+        console.log('✍️ Generating Ed25519 signing keypair...');
+        const kp = await crypto.subtle.generateKey(
+            { name: 'Ed25519' },
             true,
-            []
+            ['sign', 'verify']
         );
+        this.signingKey = kp.privateKey;
+        this.verifyKey  = kp.publicKey;
+        console.log('✅ Ed25519 signing keypair generated');
+        return kp;
     }
 
-    /**
-     * Derive a per-chat AES-256 key using ECDH + HKDF.
-     * Both parties independently derive the same key:
-     *   derivedKey = HKDF(ECDH(myPrivate, theirPublic), salt=chatId)
-     */
-    async deriveChatKey(recipientPublicKey, chatId) {
-        console.log(`🔑 Deriving ECDH chat key for chat ${chatId}...`);
+    async exportSigningPublicKey() {
+        const raw = await crypto.subtle.exportKey('raw', this.verifyKey);
+        return btoa(String.fromCharCode(...new Uint8Array(raw)));
+    }
 
-        // Step 1: ECDH - compute shared secret
+    async importSigningPublicKey(base64) {
+        const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        return crypto.subtle.importKey('raw', raw, { name: 'Ed25519' }, true, ['verify']);
+    }
+
+    // Sign arbitrary bytes/string; returns base64 signature
+    async signData(data, key) {
+        const signingKey = key || this.signingKey;
+        if (!signingKey) throw new Error('No signing key loaded');
+        const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+        const sig = await crypto.subtle.sign({ name: 'Ed25519' }, signingKey, bytes);
+        return btoa(String.fromCharCode(...new Uint8Array(sig)));
+    }
+
+    // Verify base64 signature against raw/string data with an imported verify key
+    async verifySignature(data, signatureBase64, verifyKey) {
+        try {
+            const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+            const sig   = Uint8Array.from(atob(signatureBase64), c => c.charCodeAt(0));
+            return await crypto.subtle.verify({ name: 'Ed25519' }, verifyKey, sig, bytes);
+        } catch {
+            return false;
+        }
+    }
+
+    // Encrypt Ed25519 signing private key with master key
+    async encryptSigningKey(signingKey, masterKey) {
+        const pkcs8 = await crypto.subtle.exportKey('pkcs8', signingKey);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
+        return {
+            encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            iv: btoa(String.fromCharCode(...new Uint8Array(iv)))
+        };
+    }
+
+    // Decrypt Ed25519 signing private key
+    async decryptSigningKey(encryptedData, masterKey) {
+        const iv  = Uint8Array.from(atob(encryptedData.iv),        c => c.charCodeAt(0));
+        const enc = Uint8Array.from(atob(encryptedData.encrypted), c => c.charCodeAt(0));
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, masterKey, enc);
+        return crypto.subtle.importKey('pkcs8', dec, { name: 'Ed25519' }, true, ['sign']);
+    }
+
+    // ============ X25519 KEY AGREEMENT (session key derivation) ============
+
+    // Derive per-chat AES-256-GCM key from static identity keys (existing sessions)
+    async deriveChatKey(recipientPublicKey, chatId) {
+        console.log(`🔑 Deriving X25519 chat key for chat ${chatId}...`);
         const sharedBits = await crypto.subtle.deriveBits(
-            { name: 'ECDH', public: recipientPublicKey },
+            { name: 'X25519', public: recipientPublicKey },
             this.privateKey,
             256
         );
+        return this._hkdfToChatKey(sharedBits, chatId, 'static-chat-key-v2');
+    }
 
-        // Step 2: HKDF - derive a unique AES-256 key for this specific chat
+    // Derive session key AS INITIATOR: ephemeral private key + recipient's one-time prekey public
+    // Forward secret: ephemeral private is discarded after this call
+    async deriveSessionKeyAsInitiator(myEphPrivate, recipientPrekeyPublic, chatId) {
+        console.log(`🔑 Deriving forward-secret session key (initiator) for chat ${chatId}...`);
+        const sharedBits = await crypto.subtle.deriveBits(
+            { name: 'X25519', public: recipientPrekeyPublic },
+            myEphPrivate,
+            256
+        );
+        return this._hkdfToChatKey(sharedBits, chatId, 'prekey-session-v1');
+    }
+
+    // Derive session key AS RESPONDER: own prekey private + initiator's ephemeral public
+    async deriveSessionKeyAsResponder(myPrekeyPrivate, initiatorEphPublic, chatId) {
+        console.log(`🔑 Deriving forward-secret session key (responder) for chat ${chatId}...`);
+        const sharedBits = await crypto.subtle.deriveBits(
+            { name: 'X25519', public: initiatorEphPublic },
+            myPrekeyPrivate,
+            256
+        );
+        return this._hkdfToChatKey(sharedBits, chatId, 'prekey-session-v1');
+    }
+
+    // Internal: HKDF(sharedBits, salt=chatId, info) → AES-256-GCM; cached in memory + localStorage
+    async _hkdfToChatKey(sharedBits, chatId, info) {
         const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
         const chatKey = await crypto.subtle.deriveKey(
             {
                 name: 'HKDF',
                 hash: 'SHA-256',
                 salt: new TextEncoder().encode(chatId),
-                info: new TextEncoder().encode('chat-key-v1'),
+                info: new TextEncoder().encode(info),
             },
             hkdfKey,
             { name: 'AES-GCM', length: 256 },
             true,
             ['encrypt', 'decrypt']
         );
-
         this.chatKeys.set(chatId, chatKey);
-        const exported = await crypto.subtle.exportKey('raw', chatKey);
-        localStorage.setItem(
-            `chatKey_${chatId}`,
-            btoa(String.fromCharCode(...new Uint8Array(exported)))
-        );
-
-        console.log(`✅ ECDH chat key derived for chat ${chatId}`);
+        const raw = await crypto.subtle.exportKey('raw', chatKey);
+        localStorage.setItem(`chatKey_${chatId}`,
+            btoa(String.fromCharCode(...new Uint8Array(raw))));
         return chatKey;
     }
 
-    /**
-     * Load chat key from storage
-     */
     async loadChatKey(chatId) {
-        // Check memory first
-        if (this.chatKeys.has(chatId)) {
-            return this.chatKeys.get(chatId);
-        }
-
-        // Load from storage
+        if (this.chatKeys.has(chatId)) return this.chatKeys.get(chatId);
         const stored = localStorage.getItem(`chatKey_${chatId}`);
         if (!stored) return null;
-
-        const rawKey = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
+        const raw = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
         const chatKey = await crypto.subtle.importKey(
-            'raw',
-            rawKey,
-            {
-                name: 'AES-GCM',
-            },
-            true,
-            ['encrypt', 'decrypt']
+            'raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']
         );
-
         this.chatKeys.set(chatId, chatKey);
-        console.log(`✅ Chat key loaded for chat ${chatId}`);
         return chatKey;
     }
 
+    // ============ ONE-TIME PREKEYS (forward secrecy) ============
 
+    // Generate `count` X25519 prekey pairs + Ed25519 signatures over each public key
+    async generatePrekeys(count = 10) {
+        if (!this.signingKey) throw new Error('Signing key not loaded — cannot sign prekeys');
+        const prekeys = [];
+        for (let i = 0; i < count; i++) {
+            const kp = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
+            const pubRaw    = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+            const privPkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+            const pubBase64 = btoa(String.fromCharCode(...pubRaw));
+            // Sign the prekey public key with user's Ed25519 identity key
+            const signature = await this.signData(pubRaw);
+            prekeys.push({
+                public_key:   pubBase64,
+                signature,
+                _privateBytes: Array.from(privPkcs8), // local only, never sent to server
+            });
+        }
+        return prekeys;
+    }
 
-    /**
-     * Encrypt a message
-     */
+    // Encrypt and store full prekey bundle (including private keys) in IndexedDB
+    async storePrekeyBundle(prekeys, masterKey) {
+        const payload = JSON.stringify(prekeys.map(p => ({
+            public_key:  p.public_key,
+            signature:   p.signature,
+            priv_bytes:  p._privateBytes,
+        })));
+        const iv  = crypto.getRandomValues(new Uint8Array(12));
+        const enc = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv }, masterKey, new TextEncoder().encode(payload)
+        );
+        await this._idbSet('prekeyBundle', JSON.stringify({
+            encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            iv:        btoa(String.fromCharCode(...new Uint8Array(iv))),
+        }));
+    }
+
+    async loadPrekeyBundle(masterKey) {
+        const stored = await this._idbGet('prekeyBundle');
+        if (!stored) return [];
+        const { encrypted, iv } = JSON.parse(stored);
+        const encBytes = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
+        const ivBytes  = Uint8Array.from(atob(iv),        c => c.charCodeAt(0));
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, masterKey, encBytes);
+        return JSON.parse(new TextDecoder().decode(dec));
+    }
+
+    // Retrieve and delete one prekey private key by its public key (base64); returns X25519 CryptoKey
+    // Deletion is the "one-time" guarantee: private key is gone after consumption → forward secrecy
+    async consumePrekey(prekeyPublicBase64, masterKey) {
+        const bundle = await this.loadPrekeyBundle(masterKey);
+        const idx = bundle.findIndex(p => p.public_key === prekeyPublicBase64);
+        if (idx === -1) throw new Error('Prekey not found in local bundle');
+        const prekey = bundle.splice(idx, 1)[0];
+        await this.storePrekeyBundle(bundle, masterKey); // save bundle without consumed key
+        const privBytes = new Uint8Array(prekey.priv_bytes);
+        return crypto.subtle.importKey('pkcs8', privBytes, { name: 'X25519' }, false, ['deriveBits']);
+    }
+
+    // Return only the server-safe portion of prekeys (public key + signature, no private)
+    prekeyServerPayload(prekeys) {
+        return prekeys.map(p => ({ public_key: p.public_key, signature: p.signature }));
+    }
+
+    // ============ DEVICE IDENTITY KEYS ============
+
+    async generateDeviceIdentityKey() {
+        console.log('📱 Generating device Ed25519 identity keypair...');
+        const kp = await crypto.subtle.generateKey(
+            { name: 'Ed25519' }, true, ['sign', 'verify']
+        );
+        this.deviceSigningKey = kp.privateKey;
+        this.deviceVerifyKey  = kp.publicKey;
+        return kp;
+    }
+
+    async exportDevicePublicKey() {
+        const raw = await crypto.subtle.exportKey('raw', this.deviceVerifyKey);
+        return btoa(String.fromCharCode(...new Uint8Array(raw)));
+    }
+
+    // Store device identity key encrypted with master key
+    async storeDeviceIdentityKey(masterKey) {
+        const pkcs8 = await crypto.subtle.exportKey('pkcs8', this.deviceSigningKey);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
+        await this._idbSet('deviceIdentityKey', JSON.stringify({
+            encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            iv:        btoa(String.fromCharCode(...new Uint8Array(iv))),
+            pub:       await this.exportDevicePublicKey(),
+        }));
+    }
+
+    async loadDeviceIdentityKey(masterKey) {
+        const stored = await this._idbGet('deviceIdentityKey');
+        if (!stored) return false;
+        const { encrypted, iv, pub } = JSON.parse(stored);
+        const enc     = Uint8Array.from(atob(encrypted), c => c.charCodeAt(0));
+        const ivBytes = Uint8Array.from(atob(iv),        c => c.charCodeAt(0));
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, masterKey, enc);
+        this.deviceSigningKey = await crypto.subtle.importKey(
+            'pkcs8', dec, { name: 'Ed25519' }, true, ['sign']
+        );
+        const pubRaw = Uint8Array.from(atob(pub), c => c.charCodeAt(0));
+        this.deviceVerifyKey = await crypto.subtle.importKey(
+            'raw', pubRaw, { name: 'Ed25519' }, true, ['verify']
+        );
+        return true;
+    }
+
+    // Sign the user's X25519 public key with this device's identity signing key
+    // Proves the device is legitimate and not performing MITM during onboarding
+    async signUserPublicKeyWithDevice(x25519PubBase64) {
+        if (!this.deviceSigningKey) throw new Error('Device identity key not loaded');
+        return this.signData(x25519PubBase64, this.deviceSigningKey);
+    }
+
+    // ============ MESSAGE ENCRYPTION / SIGNING ============
+
     async encryptMessage(message, chatId) {
         const chatKey = await this.loadChatKey(chatId);
-        if (!chatKey) {
-            throw new Error('No chat key found for this chat');
-        }
-
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encodedMessage = new TextEncoder().encode(message);
-
-        const encrypted = await crypto.subtle.encrypt(
-            {
-                name: 'AES-GCM',
-                iv: iv,
-            },
+        if (!chatKey) throw new Error('No chat key for this conversation');
+        const iv  = crypto.getRandomValues(new Uint8Array(12)); // 96-bit random IV per message
+        const enc = await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv },
             chatKey,
-            encodedMessage
+            new TextEncoder().encode(message)
         );
-
         return {
-            encrypted: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-            iv: btoa(String.fromCharCode(...new Uint8Array(iv))),
+            encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            iv:        btoa(String.fromCharCode(...new Uint8Array(iv))),
         };
     }
 
-    /**
-     * Decrypt a message
-     */
     async decryptMessage(encryptedBase64, ivBase64, chatId) {
         const chatKey = await this.loadChatKey(chatId);
-        if (!chatKey) {
-            throw new Error('No chat key found for this chat');
-        }
-
-        const encrypted = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
-        const iv = Uint8Array.from(atob(ivBase64), c => c.charCodeAt(0));
-
-        const decrypted = await crypto.subtle.decrypt(
-            {
-                name: 'AES-GCM',
-                iv: iv,
-            },
-            chatKey,
-            encrypted
-        );
-
-        return new TextDecoder().decode(decrypted);
+        if (!chatKey) throw new Error('No chat key for this conversation');
+        const enc = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+        const iv  = Uint8Array.from(atob(ivBase64),        c => c.charCodeAt(0));
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, chatKey, enc);
+        return new TextDecoder().decode(dec);
     }
 
-    /**
-     * Clear all keys (logout)
-     */
-    clearKeys() {
-        this.privateKey = null;
-        this.publicKey = null;
-        this.chatKeys.clear();
-        
-        // Clear from storage
-        Object.keys(localStorage).forEach(key => {
-            if (key.startsWith('chatKey_') || key === 'privateKey') {
-                localStorage.removeItem(key);
-            }
-        });
-
-        console.log('🗑️ All keys cleared');
+    // Sign plaintext before encryption (sign-then-encrypt for authenticity)
+    async signMessage(plaintext) {
+        return this.signData(plaintext);
     }
 
-    // ============ MASTER KEY METHODS ============
-
-    /**
-     * Generate master encryption key (random, independent of password)
-     */
-    async generateMasterKey() {
-        const masterKey = await crypto.subtle.generateKey(
-            { name: 'AES-GCM', length: 256 },
-            true,
-            ['encrypt', 'decrypt']
-        );
-        return masterKey;
+    // Verify a received message's signature using the sender's signing public key (base64 raw)
+    async verifyMessage(plaintext, signatureBase64, senderSigningPublicKeyBase64) {
+        const verifyKey = await this.importSigningPublicKey(senderSigningPublicKeyBase64);
+        return this.verifySignature(plaintext, signatureBase64, verifyKey);
     }
 
-    /**
-     * Encrypt master key with password
-     */
-    async encryptMasterKeyWithPassword(masterKey, password, email) {
-        const encoder = new TextEncoder();
-        const salt = await crypto.subtle.digest('SHA-256', encoder.encode(email));
-        
-        const passwordKey = await crypto.subtle.importKey(
-            'raw',
-            encoder.encode(password),
-            'PBKDF2',
-            false,
-            ['deriveKey']
-        );
+    // ============ PRIVATE KEY ENCRYPTION (AES-GCM with master key) ============
 
-        const wrappingKey = await crypto.subtle.deriveKey(
-            {
-                name: 'PBKDF2',
-                salt: new Uint8Array(salt),
-                iterations: 100000,
-                hash: 'SHA-256'
-            },
-            passwordKey,
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['wrapKey', 'unwrapKey']
-        );
-
+    async encryptPrivateKey(privateKey, masterKey) {
+        const pkcs8 = await crypto.subtle.exportKey('pkcs8', privateKey);
         const iv = crypto.getRandomValues(new Uint8Array(12));
-        const wrapped = await crypto.subtle.wrapKey('raw', masterKey, wrappingKey, { name: 'AES-GCM', iv });
-
+        const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, masterKey, pkcs8);
         return {
-            wrapped: btoa(String.fromCharCode(...new Uint8Array(wrapped))),
-            iv: btoa(String.fromCharCode(...new Uint8Array(iv))),
-            salt: btoa(String.fromCharCode(...new Uint8Array(salt)))
+            encrypted: btoa(String.fromCharCode(...new Uint8Array(enc))),
+            iv:        btoa(String.fromCharCode(...new Uint8Array(iv)))
         };
     }
 
-    /**
-     * Decrypt master key with password
-     */
+    async decryptPrivateKey(encryptedData, masterKey) {
+        const iv  = Uint8Array.from(atob(encryptedData.iv),        c => c.charCodeAt(0));
+        const enc = Uint8Array.from(atob(encryptedData.encrypted), c => c.charCodeAt(0));
+        const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, masterKey, enc);
+        return crypto.subtle.importKey('pkcs8', dec, { name: 'X25519' }, true, ['deriveBits']);
+    }
+
+    // ============ MASTER KEY — Argon2id path ============
+
+    async generateMasterKey() {
+        return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    }
+
+    // Encrypt master key using Argon2id-derived wrapping key (random salt stored alongside)
+    async encryptMasterKeyWithPassword(masterKey, password) {
+        if (typeof argon2 === 'undefined') throw new Error('argon2-browser library not loaded');
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const result = await argon2.hash({
+            pass: password, salt,
+            type: argon2.ArgonType.Argon2id,
+            mem: ARGON2_MEM, time: ARGON2_TIME, parallelism: ARGON2_PARA, hashLen: ARGON2_LEN,
+        });
+        const wrappingKey = await crypto.subtle.importKey(
+            'raw', result.hash, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']
+        );
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const wrapped = await crypto.subtle.wrapKey('raw', masterKey, wrappingKey, { name: 'AES-GCM', iv });
+        return {
+            wrapped: btoa(String.fromCharCode(...new Uint8Array(wrapped))),
+            iv:      btoa(String.fromCharCode(...new Uint8Array(iv))),
+            salt:    btoa(String.fromCharCode(...salt)),
+            kdf:     'argon2id',
+        };
+    }
+
+    // Decrypt master key using Argon2id
     async decryptMasterKeyWithPassword(encryptedData, password) {
-        const encoder = new TextEncoder();
-        const salt = Uint8Array.from(atob(encryptedData.salt), c => c.charCodeAt(0));
-        const iv = Uint8Array.from(atob(encryptedData.iv), c => c.charCodeAt(0));
+        if (typeof argon2 === 'undefined') throw new Error('argon2-browser library not loaded');
+        const salt    = Uint8Array.from(atob(encryptedData.salt),    c => c.charCodeAt(0));
+        const iv      = Uint8Array.from(atob(encryptedData.iv),      c => c.charCodeAt(0));
         const wrapped = Uint8Array.from(atob(encryptedData.wrapped), c => c.charCodeAt(0));
-
-        const passwordKey = await crypto.subtle.importKey(
-            'raw',
-            encoder.encode(password),
-            'PBKDF2',
-            false,
-            ['deriveKey']
+        const result = await argon2.hash({
+            pass: password, salt,
+            type: argon2.ArgonType.Argon2id,
+            mem: ARGON2_MEM, time: ARGON2_TIME, parallelism: ARGON2_PARA, hashLen: ARGON2_LEN,
+        });
+        const wrappingKey = await crypto.subtle.importKey(
+            'raw', result.hash, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']
         );
-
-        const wrappingKey = await crypto.subtle.deriveKey(
-            {
-                name: 'PBKDF2',
-                salt: salt,
-                iterations: 100000,
-                hash: 'SHA-256'
-            },
-            passwordKey,
-            { name: 'AES-GCM', length: 256 },
-            false,
-            ['wrapKey', 'unwrapKey']
-        );
-
-        const masterKey = await crypto.subtle.unwrapKey(
-            'raw',
-            wrapped,
-            wrappingKey,
+        return crypto.subtle.unwrapKey(
+            'raw', wrapped, wrappingKey,
             { name: 'AES-GCM', iv },
             { name: 'AES-GCM', length: 256 },
-            true,
-            ['encrypt', 'decrypt']
+            true, ['encrypt', 'decrypt']
         );
-
-        return masterKey;
     }
 
-    /**
-     * Derive auth password from user password
-     */
+    // Argon2id-derived auth password for Supabase (deterministic: fixed salt from email)
     async deriveAuthPassword(password, email) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(password + ':auth:' + email);
-        const hash = await crypto.subtle.digest('SHA-256', data);
-        return btoa(String.fromCharCode(...new Uint8Array(hash)));
+        if (typeof argon2 === 'undefined') throw new Error('argon2-browser library not loaded');
+        const saltHash = await crypto.subtle.digest(
+            'SHA-256', new TextEncoder().encode(email.toLowerCase() + ':auth-salt-v2')
+        );
+        const result = await argon2.hash({
+            pass: password,
+            salt: new Uint8Array(saltHash).slice(0, 16),
+            type: argon2.ArgonType.Argon2id,
+            mem: ARGON2_MEM, time: ARGON2_TIME, parallelism: ARGON2_PARA, hashLen: ARGON2_LEN,
+        });
+        return btoa(String.fromCharCode(...result.hash));
     }
 
-    /**
-     * Store master key in IndexedDB
-     */
+    // ============ MASTER KEY STORAGE ============
+
     async storeMasterKeyInIndexedDB(masterKey) {
-        const exported = await crypto.subtle.exportKey('raw', masterKey);
-        const base64Key = btoa(String.fromCharCode(...new Uint8Array(exported)));
-        await this._idbSet('masterKey', base64Key);
+        const raw = await crypto.subtle.exportKey('raw', masterKey);
+        await this._idbSet('masterKey', btoa(String.fromCharCode(...new Uint8Array(raw))));
         console.log('✅ Master key stored in IndexedDB');
     }
 
-    /**
-     * Load master key from IndexedDB
-     */
     async loadMasterKeyFromIndexedDB() {
         try {
             const stored = await this._idbGet('masterKey');
             if (!stored) return null;
-            const keyData = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
-            return await crypto.subtle.importKey(
-                'raw',
-                keyData,
-                { name: 'AES-GCM', length: 256 },
-                true,
-                ['encrypt', 'decrypt']
-            );
-        } catch (error) {
-            console.error('Failed to load master key:', error);
+            const raw = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
+            return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+        } catch {
             return null;
         }
     }
 
-    /**
-     * Clear master key from IndexedDB
-     */
     async clearMasterKeyFromIndexedDB() {
         await this._idbDelete('masterKey');
         console.log('🗑️ Cleared master key from IndexedDB');
     }
 
-    /**
-     * Encrypt ECDH private key with master key (AES-GCM wrap)
-     */
-    async encryptPrivateKey(privateKey, masterKey) {
-        const exported = await crypto.subtle.exportKey('pkcs8', privateKey);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encrypted = await crypto.subtle.encrypt(
-            { name: 'AES-GCM', iv },
-            masterKey,
-            exported
-        );
+    async clearMasterKey() { await this.clearMasterKeyFromIndexedDB(); }
 
-        return {
-            encrypted: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
-            iv: btoa(String.fromCharCode(...new Uint8Array(iv)))
-        };
-    }
+    // ============ RECOVERY KEY ============
 
-    /**
-     * Decrypt ECDH private key with master key
-     */
-    async decryptPrivateKey(encryptedData, masterKey) {
-        const iv = Uint8Array.from(atob(encryptedData.iv), c => c.charCodeAt(0));
-        const encrypted = Uint8Array.from(atob(encryptedData.encrypted), c => c.charCodeAt(0));
-
-        const decrypted = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv },
-            masterKey,
-            encrypted
-        );
-
-        return await crypto.subtle.importKey(
-            'pkcs8',
-            decrypted,
-            { name: 'ECDH', namedCurve: 'P-256' },
-            true,
-            ['deriveKey', 'deriveBits']
-        );
-    }
-
-    /**
-     * Generate recovery key for account recovery
-     */
     async generateRecoveryKey(masterKey) {
-        // Export master key
-        const exported = await crypto.subtle.exportKey('raw', masterKey);
-        
-        // Generate random salt
+        const raw  = await crypto.subtle.exportKey('raw', masterKey);
         const salt = crypto.getRandomValues(new Uint8Array(16));
-        
-        // Combine and encode
-        const combined = new Uint8Array(exported.byteLength + salt.byteLength);
-        combined.set(new Uint8Array(exported), 0);
-        combined.set(salt, exported.byteLength);
-        
-        // Convert to base32-like format (easier to write down)
-        const base64 = btoa(String.fromCharCode(...combined));
-        
-        // Format as groups of 4 characters
-        const formatted = base64.match(/.{1,4}/g).join('-');
-        
-        return formatted;
+        const combined = new Uint8Array(48);
+        combined.set(new Uint8Array(raw), 0);
+        combined.set(salt, 32);
+        return btoa(String.fromCharCode(...combined)).match(/.{1,4}/g).join('-');
     }
 
-    /**
-     * Restore master key from recovery key
-     */
     async restoreMasterKeyFromRecovery(recoveryKey) {
-        try {
-            // Remove dashes and decode
-            const base64 = recoveryKey.replace(/-/g, '');
-            const combined = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-            
-            // Extract master key (first 32 bytes for AES-256)
-            const masterKeyData = combined.slice(0, 32);
-            
-            // Import as master key
-            const masterKey = await crypto.subtle.importKey(
-                'raw',
-                masterKeyData,
-                { name: 'AES-GCM', length: 256 },
-                true,
-                ['encrypt', 'decrypt']
-            );
-            
-            return masterKey;
-        } catch (error) {
-            console.error('Failed to restore from recovery key:', error);
-            throw new Error('Invalid recovery key');
-        }
-    }
-
-    /**
-     * Clear master key from IndexedDB (for corrupted accounts)
-     */
-    async clearMasterKey() {
-        await this.clearMasterKeyFromIndexedDB();
+        const combined = Uint8Array.from(atob(recoveryKey.replace(/-/g, '')), c => c.charCodeAt(0));
+        return crypto.subtle.importKey(
+            'raw', combined.slice(0, 32), { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+        );
     }
 
     // ============ SERVER KEYS CACHE ============
 
-    /**
-     * Cache the server's encrypted key bundle locally.
-     * This eliminates a network round-trip on every page reload / session restore.
-     * Security: the bundle only contains already-encrypted blobs; the master key
-     * needed to decrypt them is stored separately and is equally protected.
-     */
     async storeCachedServerKeys(keys) {
         await this._idbSet('cachedServerKeys', JSON.stringify(keys));
     }
@@ -533,7 +537,22 @@ class CryptoHelper {
     async clearCachedServerKeys() {
         await this._idbDelete('cachedServerKeys');
     }
+
+    // ============ FULL KEY CLEAR (logout) ============
+
+    clearKeys() {
+        this.privateKey       = null;
+        this.publicKey        = null;
+        this.signingKey       = null;
+        this.verifyKey        = null;
+        this.deviceSigningKey = null;
+        this.deviceVerifyKey  = null;
+        this.chatKeys.clear();
+        Object.keys(localStorage).forEach(k => {
+            if (k.startsWith('chatKey_')) localStorage.removeItem(k);
+        });
+        console.log('🗑️ All in-memory keys cleared');
+    }
 }
 
-// Export for use in app.js
 window.CryptoHelper = CryptoHelper;
